@@ -12,8 +12,9 @@ import hashlib
 import secrets
 
 # ============ Configuration ============
-LOG_DIR = "logs"
-DB_PATH = "temperature_data.db"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_DIR = os.path.join(BASE_DIR, "logs")
+DB_PATH = os.path.join(BASE_DIR, "temperature_data.db")
 SECRET_KEY = secrets.token_hex(16)
 
 # ============ Database Setup ============
