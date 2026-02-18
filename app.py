@@ -15,12 +15,42 @@ import secrets
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 DB_PATH = os.path.join(BASE_DIR, "temperature_data.db")
-SECRET_KEY = secrets.token_hex(16)
+
+def _load_or_create_secret(env_var, file_name, length=32):
+    value = os.environ.get(env_var)
+    if value:
+        return value.strip()
+    path = os.path.join(BASE_DIR, file_name)
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            existing = f.read().strip()
+            if existing:
+                return existing
+    generated = secrets.token_urlsafe(length)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(generated)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return generated
+
+SECRET_KEY = _load_or_create_secret("SOIL_MONITOR_SECRET_KEY", ".secret_key", 32)
+INGEST_TOKEN = _load_or_create_secret("SOIL_MONITOR_INGEST_TOKEN", ".ingest_token", 32)
+DASHBOARD_USER = os.environ.get("SOIL_MONITOR_USER", "admin")
+DASHBOARD_PASSWORD = _load_or_create_secret("SOIL_MONITOR_PASSWORD", ".dashboard_password", 24)
+INGEST_TOKEN_HEADER = "X-INGEST-TOKEN"
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    return conn
 
 # ============ Database Setup ============
 def init_database():
     """Initialize SQLite database for better performance"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     cursor.execute('''
@@ -92,13 +122,26 @@ def require_auth(f):
     def decorated_function(*args, **kwargs):
         auth = request.authorization
         if not auth or not check_auth(auth.username, auth.password):
-            return jsonify({'error': 'Authentication required'}), 401
+            response = jsonify({'error': 'Authentication required'})
+            response.status_code = 401
+            response.headers["WWW-Authenticate"] = 'Basic realm="Soil Monitor"'
+            return response
+        return f(*args, **kwargs)
+    return decorated_function
+
+def require_ingest_token(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        supplied = request.headers.get(INGEST_TOKEN_HEADER, "")
+        if not supplied or not secrets.compare_digest(supplied, INGEST_TOKEN):
+            return jsonify({'error': 'Valid ingest token required'}), 401
         return f(*args, **kwargs)
     return decorated_function
 
 def check_auth(username, password):
-    # Simple authentication - in production, use proper user management
-    return username == 'admin' and password == 'temp2024'
+    user = username or ""
+    pwd = password or ""
+    return secrets.compare_digest(user, DASHBOARD_USER) and secrets.compare_digest(pwd, DASHBOARD_PASSWORD)
 
 # ============ Data Management ============
 class TemperatureDataManager:
@@ -109,7 +152,7 @@ class TemperatureDataManager:
     
     def add_reading(self, t1, t2, t3, battery=None, battery_status=None, timestamp=None, debug_data=None):
         """Add new temperature reading to database"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         # Extract debug data
@@ -138,6 +181,7 @@ class TemperatureDataManager:
         
         conn.commit()
         conn.close()
+        self.cache.clear()
         
 
     def _format_timestamp(self, timestamp):
@@ -148,10 +192,8 @@ class TemperatureDataManager:
             # Parse ISO format (2025-09-11T17:25:05) and convert to database format
             dt = datetime.fromisoformat(timestamp.replace('T', ' '))
             return dt.strftime("%Y-%m-%d %H:%M:%S")
-        except:
+        except Exception:
             print("Using server timestamp (ESP32 sent null)"); return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        # Clear cache
-        self.cache.clear()
     
     def get_recent_readings(self, hours=24, limit=1000):
         """Get recent temperature readings with caching"""
@@ -163,7 +205,7 @@ class TemperatureDataManager:
             if now - timestamp < self.cache_timeout:
                 return data
         
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         cutoff_time = datetime.now() - timedelta(hours=hours)
@@ -195,7 +237,7 @@ class TemperatureDataManager:
     
     def get_statistics(self, hours=24):
         """Get temperature statistics for the specified period"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         cutoff_time = datetime.now() - timedelta(hours=hours)
@@ -203,6 +245,7 @@ class TemperatureDataManager:
             SELECT t1, t2, t3, timestamp
             FROM temperature_readings
             WHERE timestamp >= ?
+            ORDER BY timestamp ASC
         ''', (cutoff_time,))
         
         data = cursor.fetchall()
@@ -247,6 +290,7 @@ data_manager = TemperatureDataManager()
 
 # ============ Routes ============
 @app.route("/submit", methods=["POST"])
+@require_ingest_token
 def submit():
     """Receive temperature data from ESP32"""
     try:
@@ -274,6 +318,7 @@ def submit():
         return jsonify({"status": "error", "message": str(e)}), 400
 
 @app.route("/alert", methods=["POST"])
+@require_ingest_token
 def battery_alert():
     """Receive battery alerts from ESP32"""
     try:
@@ -301,6 +346,7 @@ def battery_alert():
         return jsonify({"status": "error", "message": str(e)}), 400
 
 @app.route("/api/data")
+@require_auth
 def get_data():
     """Get temperature data with optional filtering"""
     hours = request.args.get('hours', 24, type=int)
@@ -310,6 +356,7 @@ def get_data():
     return jsonify(data)
 
 @app.route("/api/stats")
+@require_auth
 def get_stats():
     """Get temperature statistics"""
     hours = request.args.get('hours', 24, type=int)
@@ -317,10 +364,11 @@ def get_stats():
     return jsonify(stats)
 
 @app.route("/api/debug")
+@require_auth
 def get_debug_info():
     """Get latest debug information from device"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         # Get the most recent reading with debug data
@@ -361,11 +409,12 @@ def get_debug_info():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/health")
+@require_auth
 def health_check():
     """Health check endpoint"""
     try:
         # Check database connection
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM temperature_readings")
         count = cursor.fetchone()[0]
@@ -402,7 +451,7 @@ TEMPLATE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Soil Monitor</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/date-fns@2.29.3/index.min.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
@@ -1438,10 +1487,12 @@ DEBUG_TEMPLATE = """
 """
 
 @app.route("/")
+@require_auth
 def index():
     return render_template_string(TEMPLATE)
 
 @app.route("/debug-view")
+@require_auth
 def debug_view():
     return render_template_string(DEBUG_TEMPLATE)
 
@@ -1472,4 +1523,5 @@ if __name__ == "__main__":
     migration_thread.daemon = True
     migration_thread.start()
 
-    app.run(host="0.0.0.0", port=5050, debug=True)
+    debug_mode = os.environ.get("SOIL_MONITOR_DEBUG", "0") == "1"
+    app.run(host="0.0.0.0", port=5050, debug=debug_mode)
