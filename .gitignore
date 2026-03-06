@@ -3,3 +3,7 @@ __pycache__/
 .venv/
 logs/
 *.log
+.dashboard_password
+.ingest_token
+.secret_key
+temperature_data.db.bak.*

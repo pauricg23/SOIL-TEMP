@@ -1,5 +1,5 @@
 from flask import Flask, render_template_string, jsonify, request, send_from_directory
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import sqlite3
@@ -10,6 +10,7 @@ import time
 from functools import wraps
 import hashlib
 import secrets
+import logging
 
 # ============ Configuration ============
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -41,6 +42,28 @@ DASHBOARD_USER = os.environ.get("SOIL_MONITOR_USER", "admin")
 DASHBOARD_PASSWORD = _load_or_create_secret("SOIL_MONITOR_PASSWORD", ".dashboard_password", 24)
 INGEST_TOKEN_HEADER = "X-INGEST-TOKEN"
 
+class OnlyPostFilter(logging.Filter):
+    def filter(self, record):
+        msg = record.getMessage()
+        if 'HTTP/' not in msg:
+            return True
+        return ('"POST /submit ' in msg) or ('"POST /alert ' in msg) or ('"GET /ack?' in msg)
+
+def configure_request_logging():
+    logger = logging.getLogger("werkzeug")
+    flt = None
+    for f in logger.filters:
+        if isinstance(f, OnlyPostFilter):
+            flt = f
+            break
+    if flt is None:
+        flt = OnlyPostFilter()
+        logger.addFilter(flt)
+    for h in logger.handlers:
+        if not any(isinstance(f, OnlyPostFilter) for f in h.filters):
+            h.addFilter(flt)
+
+
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH, timeout=5)
     conn.execute("PRAGMA journal_mode=WAL")
@@ -57,6 +80,10 @@ def init_database():
         CREATE TABLE IF NOT EXISTS temperature_readings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            msg_id TEXT,
+            timestamp_raw TEXT,
+            timestamp_source TEXT DEFAULT 'server',
+            timestamp_epoch INTEGER,
             t1 REAL,
             t2 REAL,
             t3 REAL,
@@ -67,6 +94,8 @@ def init_database():
             wake_cause_name TEXT,
             reset_reason INTEGER,
             reset_reason_name TEXT,
+            last_fail TEXT,
+            last_fail_cycle INTEGER,
             boot_count INTEGER,
             last_boot_count INTEGER,
             probe_mode_completed BOOLEAN,
@@ -94,10 +123,13 @@ def init_database():
     
     # Add debug columns if they don't exist
     debug_columns = [
+        ('msg_id', 'TEXT'),
         ('wake_cause', 'INTEGER'),
         ('wake_cause_name', 'TEXT'),
         ('reset_reason', 'INTEGER'),
         ('reset_reason_name', 'TEXT'),
+        ('last_fail', 'TEXT'),
+        ('last_fail_cycle', 'INTEGER'),
         ('boot_count', 'INTEGER'),
         ('last_boot_count', 'INTEGER'),
         ('probe_mode_completed', 'BOOLEAN'),
@@ -112,6 +144,40 @@ def init_database():
             cursor.execute(f'ALTER TABLE temperature_readings ADD COLUMN {column_name} {column_type}')
         except sqlite3.OperationalError:
             pass  # Column already exists
+
+    try:
+        cursor.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_msg_id_unique
+            ON temperature_readings(msg_id)
+            WHERE msg_id IS NOT NULL
+        ''')
+    except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+        print(f"Skipping msg_id unique index creation: {e}")
+
+    # Add timestamp tracking columns for unambiguous source/format
+    timestamp_columns = [
+        ('timestamp_raw', 'TEXT'),
+        ('timestamp_source', "TEXT DEFAULT 'server'"),
+        ('timestamp_epoch', 'INTEGER')
+    ]
+
+    for column_name, column_type in timestamp_columns:
+        try:
+            cursor.execute(f'ALTER TABLE temperature_readings ADD COLUMN {column_name} {column_type}')
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    # Backfill legacy rows so old data has a comparable epoch and a known source label.
+    cursor.execute('''
+        UPDATE temperature_readings
+        SET timestamp_epoch = CAST(strftime('%s', timestamp) AS INTEGER)
+        WHERE timestamp IS NOT NULL AND timestamp_epoch IS NULL
+    ''')
+    cursor.execute('''
+        UPDATE temperature_readings
+        SET timestamp_source = 'legacy'
+        WHERE timestamp_source IS NULL OR timestamp_source = ''
+    ''')
     
     conn.commit()
     conn.close()
@@ -133,7 +199,21 @@ def require_ingest_token(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         supplied = request.headers.get(INGEST_TOKEN_HEADER, "")
-        if not supplied or not secrets.compare_digest(supplied, INGEST_TOKEN):
+        if supplied and secrets.compare_digest(supplied, INGEST_TOKEN):
+            return f(*args, **kwargs)
+
+        query_token = request.args.get("ingest_token", "")
+        if query_token and secrets.compare_digest(str(query_token), INGEST_TOKEN):
+            return f(*args, **kwargs)
+
+        # Walter firmware can send the token in JSON when custom headers are awkward.
+        data = request.get_json(silent=True)
+        body_token = ""
+        if isinstance(data, dict):
+            raw = data.get("ingest_token", "")
+            body_token = raw if isinstance(raw, str) else str(raw)
+
+        if not body_token or not secrets.compare_digest(body_token, INGEST_TOKEN):
             return jsonify({'error': 'Valid ingest token required'}), 401
         return f(*args, **kwargs)
     return decorated_function
@@ -143,6 +223,19 @@ def check_auth(username, password):
     pwd = password or ""
     return secrets.compare_digest(user, DASHBOARD_USER) and secrets.compare_digest(pwd, DASHBOARD_PASSWORD)
 
+def coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("true", "1", "yes", "y", "on"):
+            return True
+        if v in ("false", "0", "no", "n", "off"):
+            return False
+    return None
+
 # ============ Data Management ============
 class TemperatureDataManager:
     def __init__(self):
@@ -150,50 +243,78 @@ class TemperatureDataManager:
         self.cache_timeout = 60  # seconds
         init_database()
     
-    def add_reading(self, t1, t2, t3, battery=None, battery_status=None, timestamp=None, debug_data=None):
+    def add_reading(self, t1, t2, t3, battery=None, battery_status=None, timestamp=None, debug_data=None, msg_id=None):
         """Add new temperature reading to database"""
         conn = get_db_connection()
         cursor = conn.cursor()
+        msg_id = None if msg_id in (None, "") else str(msg_id)[:96]
         
         # Extract debug data
         wake_cause = debug_data.get('wake_cause') if debug_data else None
         wake_cause_name = debug_data.get('wake_cause_name') if debug_data else None
         reset_reason = debug_data.get('reset_reason') if debug_data else None
         reset_reason_name = debug_data.get('reset_reason_name') if debug_data else None
+        last_fail = debug_data.get('last_fail') if debug_data else None
+        last_fail_cycle = debug_data.get('last_fail_cycle') if debug_data else None
         boot_count = debug_data.get('boot_count') if debug_data else None
         last_boot_count = debug_data.get('last_boot_count') if debug_data else None
-        probe_mode_completed = debug_data.get('probe_mode_completed') == 'true' if debug_data else None
-        should_run_probe = debug_data.get('should_run_probe') == 'true' if debug_data else None
-        probe_done_this_cycle = debug_data.get('probe_done_this_cycle') == 'true' if debug_data else None
-        rtc_sleep_armed = debug_data.get('rtc_sleep_armed') == 'true' if debug_data else None
-        unsafe_wake = debug_data.get('unsafe_wake') == 'true' if debug_data else None
+        probe_mode_completed = coerce_bool(debug_data.get('probe_mode_completed')) if debug_data else None
+        should_run_probe = coerce_bool(debug_data.get('should_run_probe')) if debug_data else None
+        probe_done_this_cycle = coerce_bool(debug_data.get('probe_done_this_cycle')) if debug_data else None
+        rtc_sleep_armed = coerce_bool(debug_data.get('rtc_sleep_armed')) if debug_data else None
+        unsafe_wake = coerce_bool(debug_data.get('unsafe_wake')) if debug_data else None
+        temps_valid = coerce_bool(debug_data.get('temps_valid')) if debug_data else None
+        sensor_status = "invalid_temp" if temps_valid is False else "active"
         
+        normalized_ts, ts_source, raw_ts, ts_epoch = self._resolve_timestamp(timestamp)
+
         cursor.execute('''
-            INSERT INTO temperature_readings (timestamp, t1, t2, t3, battery, battery_status,
-                wake_cause, wake_cause_name, reset_reason, reset_reason_name, boot_count, 
+            INSERT OR IGNORE INTO temperature_readings (timestamp, msg_id, timestamp_raw, timestamp_source, timestamp_epoch,
+                t1, t2, t3, battery, battery_status, sensor_status,
+                wake_cause, wake_cause_name, reset_reason, reset_reason_name, last_fail, last_fail_cycle, boot_count, 
                 last_boot_count, probe_mode_completed, should_run_probe, probe_done_this_cycle,
                 rtc_sleep_armed, unsafe_wake)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (self._format_timestamp(timestamp), t1, t2, t3, battery, battery_status,
-              wake_cause, wake_cause_name, reset_reason, reset_reason_name, boot_count,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (normalized_ts, msg_id, raw_ts, ts_source, ts_epoch, t1, t2, t3, battery, battery_status, sensor_status,
+              wake_cause, wake_cause_name, reset_reason, reset_reason_name, last_fail, last_fail_cycle, boot_count,
               last_boot_count, probe_mode_completed, should_run_probe, probe_done_this_cycle,
               rtc_sleep_armed, unsafe_wake))
-        
+        inserted = cursor.rowcount > 0
         conn.commit()
         conn.close()
         self.cache.clear()
-        
+        return inserted
 
-    def _format_timestamp(self, timestamp):
-        """Convert ISO timestamp to database format"""
-        if not timestamp or timestamp == "null":
-            print("Using server timestamp (ESP32 sent null)"); return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    def _resolve_timestamp(self, timestamp):
+        """Resolve a reading timestamp and record where it came from."""
+        raw_ts = None if timestamp is None else str(timestamp).strip()
+        if not raw_ts or raw_ts.lower() == "null":
+            now = datetime.now()
+            return now.strftime("%Y-%m-%d %H:%M:%S"), "server", None, int(now.timestamp())
         try:
-            # Parse ISO format (2025-09-11T17:25:05) and convert to database format
-            dt = datetime.fromisoformat(timestamp.replace('T', ' '))
-            return dt.strftime("%Y-%m-%d %H:%M:%S")
+            normalized = raw_ts.replace('Z', '+00:00').replace('T', ' ')
+            dt = datetime.fromisoformat(normalized)
+            if dt.tzinfo is not None:
+                epoch = int(dt.timestamp())
+                dt_utc = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            else:
+                dt_utc = dt
+                epoch = int(dt_utc.replace(tzinfo=timezone.utc).timestamp())
+            return dt_utc.strftime("%Y-%m-%d %H:%M:%S"), "device", raw_ts, epoch
         except Exception:
-            print("Using server timestamp (ESP32 sent null)"); return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            now = datetime.now()
+            print("Using server timestamp (invalid ESP32 ts)")
+            return now.strftime("%Y-%m-%d %H:%M:%S"), "server", raw_ts, int(now.timestamp())
+
+    def has_msg_id(self, msg_id):
+        if not msg_id:
+            return False
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT 1 FROM temperature_readings WHERE msg_id = ? LIMIT 1', (str(msg_id)[:96],))
+        exists = cursor.fetchone() is not None
+        conn.close()
+        return exists
     
     def get_recent_readings(self, hours=24, limit=1000):
         """Get recent temperature readings with caching"""
@@ -207,26 +328,46 @@ class TemperatureDataManager:
         
         conn = get_db_connection()
         cursor = conn.cursor()
-        
-        cutoff_time = datetime.now() - timedelta(hours=hours)
-        cursor.execute('''
-            SELECT timestamp, t1, t2, t3, battery, battery_status
-            FROM temperature_readings
-            WHERE timestamp >= ?
-            ORDER BY timestamp DESC
-            LIMIT ?
-        ''', (cutoff_time, limit))
+
+        if hours is None or hours <= 0:
+            cursor.execute('''
+                SELECT timestamp, t1, t2, t3, battery, battery_status, timestamp_source, timestamp_epoch
+                FROM temperature_readings
+                ORDER BY timestamp DESC
+                LIMIT ?
+            ''', (limit,))
+        else:
+            cutoff_time = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute('''
+                SELECT timestamp, t1, t2, t3, battery, battery_status, timestamp_source, timestamp_epoch
+                FROM temperature_readings
+                WHERE timestamp >= ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            ''', (cutoff_time, limit))
         
         data = []
         for row in cursor.fetchall():
+            ts_dt = datetime.fromisoformat(row[0])
+            display_dt = ts_dt
+            # Keep the stored timestamp exact, but bucket device-timestamped readings
+            # to the nearest hour for display on the chart.
+            if row[6] == "device":
+                if ts_dt.minute >= 30:
+                    display_dt = (ts_dt.replace(minute=0, second=0, microsecond=0) +
+                                  timedelta(hours=1))
+                else:
+                    display_dt = ts_dt.replace(minute=0, second=0, microsecond=0)
             data.append({
-                'time': datetime.fromisoformat(row[0]).strftime('%H:%M'),
+                'time': display_dt.strftime('%H:%M'),
                 'ts': row[0],
                 't1': row[1],
                 't2': row[2],
                 't3': row[3],
                 'battery': row[4],
-                'battery_status': row[5]
+                'battery_status': row[5],
+                'timestamp_source': row[6],
+                'timestamp_epoch': row[7]
             })
         
         conn.close()
@@ -239,14 +380,21 @@ class TemperatureDataManager:
         """Get temperature statistics for the specified period"""
         conn = get_db_connection()
         cursor = conn.cursor()
-        
-        cutoff_time = datetime.now() - timedelta(hours=hours)
-        cursor.execute('''
-            SELECT t1, t2, t3, timestamp
-            FROM temperature_readings
-            WHERE timestamp >= ?
-            ORDER BY timestamp ASC
-        ''', (cutoff_time,))
+
+        if hours is None or hours <= 0:
+            cursor.execute('''
+                SELECT t1, t2, t3, timestamp
+                FROM temperature_readings
+                ORDER BY timestamp ASC
+            ''')
+        else:
+            cutoff_time = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute('''
+                SELECT t1, t2, t3, timestamp
+                FROM temperature_readings
+                WHERE timestamp >= ?
+                ORDER BY timestamp ASC
+            ''', (cutoff_time,))
         
         data = cursor.fetchall()
         conn.close()
@@ -284,6 +432,7 @@ class TemperatureDataManager:
 
 # ============ Flask App ============
 app = Flask(__name__)
+configure_request_logging()
 app.secret_key = SECRET_KEY
 
 data_manager = TemperatureDataManager()
@@ -300,6 +449,7 @@ def submit():
         t1 = validate_temp(data.get("t1"))
         t2 = validate_temp(data.get("t2"))
         t3 = validate_temp(data.get("t3"))
+        msg_id = data.get("msg_id")
         
         # Get battery data
         battery = data.get("battery")
@@ -308,8 +458,21 @@ def submit():
         # Get debug data
         debug_data = data.get("debug")
         
-        if t1 is not None or t2 is not None or t3 is not None:
-            data_manager.add_reading(t1, t2, t3, battery, battery_status, data.get("ts"), debug_data)
+        temps_valid_flag = coerce_bool(debug_data.get("temps_valid")) if isinstance(debug_data, dict) else None
+        is_invalid_temp_heartbeat = (
+            temps_valid_flag is False and
+            isinstance(debug_data, dict) and
+            debug_data.get("note") == "invalid_temp_reading"
+        )
+
+        if t1 is not None or t2 is not None or t3 is not None or is_invalid_temp_heartbeat:
+            inserted = data_manager.add_reading(
+                t1, t2, t3, battery, battery_status, data.get("ts"), debug_data, msg_id=msg_id
+            )
+            if not inserted:
+                return jsonify({"status": "ok", "message": "Duplicate msg_id ignored"}), 200
+            if is_invalid_temp_heartbeat and t1 is None and t2 is None and t3 is None:
+                return jsonify({"status": "ok", "message": "Heartbeat recorded (invalid temps)"}), 200
             return jsonify({"status": "ok", "message": "Data recorded successfully"}), 200
         else:
             return jsonify({"status": "error", "message": "No valid temperature data"}), 400
@@ -329,7 +492,16 @@ def battery_alert():
         message = data.get("message")
         
         # Log the alert
-        print(f"🔋 BATTERY ALERT: {alert_type} - {message} (Voltage: {battery_voltage}V)")
+        if alert_type == "wifi_fallback":
+            prefix = "WIFI DEBUG"
+        elif alert_type == "device_debug":
+            prefix = "DEVICE DEBUG"
+        else:
+            prefix = "ALERT"
+        if battery_voltage is None:
+            print(f"{prefix}: {alert_type} - {message}")
+        else:
+            print(f"{prefix}: {alert_type} - {message} (Voltage: {battery_voltage}V)")
         
         # You could add email notifications, database logging, etc. here
         # For now, just log to console and return success
@@ -344,6 +516,16 @@ def battery_alert():
     except Exception as e:
         print(f"Error processing battery alert: {e}")
         return jsonify({"status": "error", "message": str(e)}), 400
+
+@app.route("/ack", methods=["GET"])
+@require_ingest_token
+def ack_msg():
+    msg_id = (request.args.get("msg_id") or "").strip()
+    if not msg_id:
+        return jsonify({"status": "error", "message": "msg_id required"}), 400
+    if data_manager.has_msg_id(msg_id):
+        return jsonify({"status": "ok", "msg_id": msg_id, "exists": True}), 200
+    return jsonify({"status": "missing", "msg_id": msg_id, "exists": False}), 404
 
 @app.route("/api/data")
 @require_auth
@@ -373,10 +555,9 @@ def get_debug_info():
         
         # Get the most recent reading with debug data
         cursor.execute('''
-            SELECT wake_cause, wake_cause_name, reset_reason, reset_reason_name,
-                   boot_count, last_boot_count, probe_mode_completed, 
-                   should_run_probe, probe_done_this_cycle, rtc_sleep_armed, unsafe_wake,
-                   battery, battery_status
+            SELECT timestamp, timestamp_source, sensor_status,
+                   wake_cause, wake_cause_name, reset_reason, reset_reason_name,
+                   last_fail, last_fail_cycle, battery, battery_status
             FROM temperature_readings 
             WHERE wake_cause IS NOT NULL 
             ORDER BY timestamp DESC 
@@ -388,19 +569,17 @@ def get_debug_info():
         
         if row:
             return jsonify({
-                "wake_cause": row[0],
-                "wake_cause_name": row[1],
-                "reset_reason": row[2],
-                "reset_reason_name": row[3],
-                "boot_count": row[4],
-                "last_boot_count": row[5],
-                "probe_mode_completed": row[6],
-                "should_run_probe": row[7],
-                "probe_done_this_cycle": row[8],
-                "rtc_sleep_armed": row[9],
-                "unsafe_wake": row[10],
-                "battery": row[11],
-                "battery_status": row[12]
+                "timestamp": row[0],
+                "timestamp_source": row[1],
+                "sensor_status": row[2],
+                "wake_cause": row[3],
+                "wake_cause_name": row[4],
+                "reset_reason": row[5],
+                "reset_reason_name": row[6],
+                "last_fail": row[7],
+                "last_fail_cycle": row[8],
+                "battery": row[9],
+                "battery_status": row[10]
             }), 200
         else:
             return jsonify({"message": "No debug data available"}), 404
@@ -885,10 +1064,11 @@ TEMPLATE = """
             <h1><i class="fas fa-seedling"></i> Soil Monitor</h1>
             <div class="controls">
                 <select class="time-selector" id="timeRange">
-                    <option value="1">Last Hour</option>
                     <option value="6">Last 6 Hours</option>
                     <option value="24" selected>Last 24 Hours</option>
                     <option value="168">Last Week</option>
+                    <option value="720">Last Month</option>
+                    <option value="-1">All Time</option>
                 </select>
                 <button class="theme-toggle" id="themeToggle">
                     <i class="fas fa-moon"></i>
@@ -923,9 +1103,6 @@ TEMPLATE = """
                 <div class="chart-controls">
                     <button class="chart-btn active" data-chart="line">
                         <i class="fas fa-chart-line"></i>
-                    </button>
-                    <button class="chart-btn" data-chart="bar">
-                        <i class="fas fa-chart-bar"></i>
                     </button>
                     <button class="chart-btn" data-chart="area">
                         <i class="fas fa-chart-area"></i>
@@ -1290,11 +1467,10 @@ TEMPLATE = """
         function changeChartType(type) {
             const chartTypes = {
                 'line': 'line',
-                'bar': 'bar',
                 'area': 'line'
             };
 
-            mainChart.config.type = chartTypes[type];
+            mainChart.config.type = chartTypes[type] || 'line';
             
             if (type === 'area') {
                 mainChart.data.datasets.forEach(dataset => {
@@ -1439,24 +1615,23 @@ DEBUG_TEMPLATE = """
             <h1><i class="fas fa-bug"></i> Device Debug</h1>
             <a class="btn" href="/">Back to Dashboard</a>
         </div>
+        <div class="row"><div class="k">Last Seen</div><div class="v" id="timestamp">--</div></div>
+        <div class="row"><div class="k">Timestamp Source</div><div class="v" id="timestamp_source">--</div></div>
+        <div class="row"><div class="k">Reading Status</div><div class="v" id="sensor_status">--</div></div>
         <div class="row"><div class="k">Wake Cause</div><div class="v" id="wake_cause_name">--</div></div>
         <div class="row"><div class="k">Reset Reason</div><div class="v" id="reset_reason_name">--</div></div>
-        <div class="row"><div class="k">Boot Count</div><div class="v" id="boot_count">--</div></div>
-        <div class="row"><div class="k">Last Boot Count</div><div class="v" id="last_boot_count">--</div></div>
-        <div class="row"><div class="k">Probe Mode Completed</div><div class="v" id="probe_mode_completed">--</div></div>
-        <div class="row"><div class="k">Should Run Probe</div><div class="v" id="should_run_probe">--</div></div>
-        <div class="row"><div class="k">Probe Done This Cycle</div><div class="v" id="probe_done_this_cycle">--</div></div>
-        <div class="row"><div class="k">RTC Sleep Armed</div><div class="v" id="rtc_sleep_armed">--</div></div>
-        <div class="row"><div class="k">Unsafe Wake</div><div class="v" id="unsafe_wake">--</div></div>
+        <div class="row"><div class="k">Last Failure</div><div class="v" id="last_fail">--</div></div>
+        <div class="row"><div class="k">Last Failure Cycle</div><div class="v" id="last_fail_cycle">--</div></div>
         <div class="row"><div class="k">Battery</div><div class="v" id="battery">--</div></div>
         <div class="row"><div class="k">Battery Status</div><div class="v" id="battery_status">--</div></div>
         <div class="muted">Auto-refreshes every 10 seconds.</div>
     </div>
     <script>
         const fields = [
-            "wake_cause_name", "reset_reason_name", "boot_count", "last_boot_count",
-            "probe_mode_completed", "should_run_probe", "probe_done_this_cycle",
-            "rtc_sleep_armed", "unsafe_wake", "battery", "battery_status"
+            "timestamp", "timestamp_source", "sensor_status",
+            "wake_cause_name", "reset_reason_name",
+            "last_fail", "last_fail_cycle",
+            "battery", "battery_status"
         ];
 
         function setValue(id, val) {
