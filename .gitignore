@@ -6,4 +6,7 @@ logs/
 .dashboard_password
 .ingest_token
 .secret_key
+temperature_data.db
+temperature_data.db-wal
+temperature_data.db-shm
 temperature_data.db.bak.*
