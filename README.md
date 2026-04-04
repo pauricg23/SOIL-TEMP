@@ -1,8 +1,24 @@
-# Soil Monitor Web App
+# Soil/Compost Temperature Monitor
 
-Flask dashboard for compost/soil temperature monitoring.
+End-to-end temperature monitoring for a compost heap (or soil) with:
 
-## Run locally
+- A Flask dashboard + SQLite storage (runs well on a Raspberry Pi).
+- Firmware for a Walter-based LTE device that POSTs readings to the server.
+- Optional Cloudflare Tunnel exposure (no inbound ports needed on your home network).
+
+## Architecture
+
+- Device sends readings to the server:
+  - `POST /submit` (JSON body, token-protected)
+  - Optional: `POST /alert` for debug events
+  - Optional: `GET /ack?msg_id=...` for idempotency/ack checks
+- Dashboard reads data from the server (Basic Auth protected):
+  - `GET /` (HTML)
+  - `GET /api/data`
+  - `GET /api/stats`
+  - `GET /api/debug`
+
+## Running Locally
 
 ```bash
 python3 -m venv .venv
@@ -11,34 +27,62 @@ pip install -r requirements.txt
 python3 app.py
 ```
 
-Open: http://<host-ip>:5050
+Open `http://<host-ip>:5050`.
 
-## Secrets (do not commit)
+## Authentication Model
 
-The server generates/loads these on first run and they should stay local:
+- Ingest endpoints (`/submit`, `/alert`, `/ack`) require a shared ingest token.
+  - Device can send it as `"ingest_token": "..."` in JSON (supported for constrained firmware).
+  - Or via header `X-INGEST-TOKEN: ...`.
+- Dashboard/API endpoints require Basic Auth (user + password).
 
-- `.secret_key` (Flask session secret)
-- `.ingest_token` (shared ingest token for devices)
-- `.dashboard_password` (Basic Auth password for dashboard APIs)
+## Secrets (Do Not Commit)
 
-You can also override them via environment variables:
+On first run the server generates these files (or loads them from env). Keep them local:
+
+- `.secret_key` (Flask session key)
+- `.ingest_token` (device shared token)
+- `.dashboard_password` (Basic Auth password)
+
+Environment overrides:
 
 - `SOIL_MONITOR_SECRET_KEY`
 - `SOIL_MONITOR_INGEST_TOKEN`
+- `SOIL_MONITOR_USER` (default `admin`)
 - `SOIL_MONITOR_PASSWORD`
-- `SOIL_MONITOR_USER` (defaults to `admin`)
 
-## Firmware (Walter)
+## Data Storage
 
-Walter/ESP firmware used to post readings lives under `firmware/`.
+- SQLite DB file: `temperature_data.db` (ignored by git).
+- WAL mode is enabled for better concurrency on Pi.
 
-- `firmware/walter_compost_sensor` is a PlatformIO project.
-- Do not commit tokens/WiFi creds:
-  - Copy `firmware/walter_compost_sensor/src/ingest_token.example.h` to `firmware/walter_compost_sensor/src/ingest_token.local.h`
-  - Copy `firmware/walter_compost_sensor/src/wifi_secrets.example.h` to `firmware/walter_compost_sensor/src/wifi_secrets.local.h`
+## Raspberry Pi Deployment (systemd)
 
-## Includes
+Typical `systemd` setup:
 
-- `app.py` - Flask app
-- `logs/` - runtime logs (ignored by git)
-- `requirements.txt` - Python dependencies
+- Create a venv and install deps in the repo directory.
+- Run `app.py` with a service like `soil-monitor.service`.
+- Ensure `Restart=always` and `WantedBy=multi-user.target` so it comes back after power cuts.
+
+## Cloudflare Tunnel (Optional)
+
+If you use `cloudflared`, configure ingress to forward to your local service:
+
+- `http://127.0.0.1:5050`
+
+This keeps the Pi off the public internet while still allowing remote access via your hostname.
+
+## Firmware (Walter LTE)
+
+Firmware lives in `firmware/walter_compost_sensor` (PlatformIO).
+
+Local-only config files (ignored by git):
+
+- Copy `firmware/walter_compost_sensor/src/ingest_token.example.h` to `firmware/walter_compost_sensor/src/ingest_token.local.h`
+- Copy `firmware/walter_compost_sensor/src/wifi_secrets.example.h` to `firmware/walter_compost_sensor/src/wifi_secrets.local.h`
+
+Do not hardcode the real ingest token in a public repo.
+
+## Development Notes
+
+- For reliable ingest, firmware should send a stable unique `msg_id` per reading. The server de-dupes by `msg_id`.
