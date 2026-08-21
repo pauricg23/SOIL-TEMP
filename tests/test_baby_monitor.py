@@ -90,6 +90,9 @@ class BabyMonitorTest(unittest.TestCase):
         soil = self.client.get("/soil", headers=headers)
         self.assertIn(b"Baby room", landing.data)
         self.assertIn(b"Sleepwear helper", baby.data)
+        self.assertIn(b'id="temperatureChart"', baby.data)
+        self.assertIn(b'id="humidityChart"', baby.data)
+        self.assertIn(b'id="co2Chart"', baby.data)
         self.assertIn(b"Soil Monitor", soil.data)
 
 

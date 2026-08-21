@@ -111,6 +111,7 @@
         .toolbar select { width: auto; margin: 0; }
         .charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-bottom: 22px; }
         .chart-card { padding: 24px; min-height: 340px; }
+        .chart-card.co2-history { grid-column: 1 / -1; }
         .chart-wrap { height: 260px; margin-top: 14px; }
         .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 18px; }
         .stat { padding: 12px; border-radius: 14px; background: #f8f6fb; text-align: center; }
@@ -212,11 +213,16 @@
 
         <section class="charts">
             <article class="card chart-card">
-                <h2>Temperature & humidity</h2>
-                <div class="chart-wrap"><canvas id="environmentChart"></canvas></div>
-                <div id="environmentStats" class="stats"></div>
+                <h2>Temperature</h2>
+                <div class="chart-wrap"><canvas id="temperatureChart"></canvas></div>
+                <div id="temperatureStats" class="stats"></div>
             </article>
             <article class="card chart-card">
+                <h2>Humidity</h2>
+                <div class="chart-wrap"><canvas id="humidityChart"></canvas></div>
+                <div id="humidityStats" class="stats"></div>
+            </article>
+            <article class="card chart-card co2-history">
                 <h2>CO₂</h2>
                 <div class="chart-wrap"><canvas id="co2Chart"></canvas></div>
                 <div id="co2Stats" class="stats"></div>
@@ -259,7 +265,8 @@
         };
 
         let latestTemperature = null;
-        let environmentChart;
+        let temperatureChart;
+        let humidityChart;
         let co2Chart;
 
         function temperatureBand(value) {
@@ -330,10 +337,15 @@
 
         function updateStats(stats) {
             if (!stats.latest) return;
-            document.getElementById("environmentStats").innerHTML = statMarkup([
-                {value: `${stats.temperature.min.toFixed(1)}°`, label: "Temp low"},
-                {value: `${stats.temperature.avg.toFixed(1)}°`, label: "Temp average"},
-                {value: `${stats.humidity.avg.toFixed(1)}%`, label: "Humidity average"}
+            document.getElementById("temperatureStats").innerHTML = statMarkup([
+                {value: `${stats.temperature.min.toFixed(1)}°`, label: "Low"},
+                {value: `${stats.temperature.avg.toFixed(1)}°`, label: "Average"},
+                {value: `${stats.temperature.max.toFixed(1)}°`, label: "High"}
+            ]);
+            document.getElementById("humidityStats").innerHTML = statMarkup([
+                {value: `${stats.humidity.min.toFixed(1)}%`, label: "Low"},
+                {value: `${stats.humidity.avg.toFixed(1)}%`, label: "Average"},
+                {value: `${stats.humidity.max.toFixed(1)}%`, label: "High"}
             ]);
             document.getElementById("co2Stats").innerHTML = statMarkup([
                 {value: `${stats.co2.min} ppm`, label: "Low"},
@@ -342,7 +354,7 @@
             ]);
         }
 
-        function chartOptions() {
+        function chartOptions(unit) {
             return {
                 responsive: true,
                 maintainAspectRatio: false,
@@ -350,7 +362,10 @@
                 plugins: {legend: {labels: {usePointStyle: true, boxWidth: 8}}},
                 scales: {
                     x: {grid: {display: false}, ticks: {maxTicksLimit: 6}},
-                    y: {grid: {color: "rgba(99,84,128,.08)"}}
+                    y: {
+                        grid: {color: "rgba(99,84,128,.08)"},
+                        title: {display: true, text: unit}
+                    }
                 }
             };
         }
@@ -358,22 +373,29 @@
         function updateCharts(rows) {
             const ordered = [...rows].reverse();
             const labels = ordered.map(row => formatTime(row.timestamp));
-            if (environmentChart) environmentChart.destroy();
+            if (temperatureChart) temperatureChart.destroy();
+            if (humidityChart) humidityChart.destroy();
             if (co2Chart) co2Chart.destroy();
-            environmentChart = new Chart(document.getElementById("environmentChart"), {
+            temperatureChart = new Chart(document.getElementById("temperatureChart"), {
                 type: "line",
                 data: {labels, datasets: [
-                    {label: "Temperature °C", data: ordered.map(row => row.temperature_c), borderColor: "#c58b9e", backgroundColor: "rgba(197,139,158,.12)", tension: .35, pointRadius: 0},
-                    {label: "Humidity %", data: ordered.map(row => row.humidity_rh), borderColor: "#7aa9c6", backgroundColor: "rgba(122,169,198,.12)", tension: .35, pointRadius: 0}
+                    {label: "Temperature °C", data: ordered.map(row => row.temperature_c), borderColor: "#c58b9e", backgroundColor: "rgba(197,139,158,.12)", fill: true, tension: .35, pointRadius: 0}
                 ]},
-                options: chartOptions()
+                options: chartOptions("°C")
+            });
+            humidityChart = new Chart(document.getElementById("humidityChart"), {
+                type: "line",
+                data: {labels, datasets: [
+                    {label: "Humidity %", data: ordered.map(row => row.humidity_rh), borderColor: "#7aa9c6", backgroundColor: "rgba(122,169,198,.12)", fill: true, tension: .35, pointRadius: 0}
+                ]},
+                options: chartOptions("%")
             });
             co2Chart = new Chart(document.getElementById("co2Chart"), {
                 type: "line",
                 data: {labels, datasets: [
                     {label: "CO₂ ppm", data: ordered.map(row => row.co2_ppm), borderColor: "#72ae91", backgroundColor: "rgba(114,174,145,.16)", fill: true, tension: .35, pointRadius: 0}
                 ]},
-                options: chartOptions()
+                options: chartOptions("ppm")
             });
         }
 
