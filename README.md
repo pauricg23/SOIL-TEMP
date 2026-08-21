@@ -5,6 +5,7 @@ End-to-end temperature monitoring for a compost heap (or soil) with:
 - A Flask dashboard + SQLite storage (runs well on a Raspberry Pi).
 - Firmware for a Walter-based LTE device that POSTs readings to the server.
 - Optional Cloudflare Tunnel exposure (no inbound ports needed on your home network).
+- An ESP32 + SCD40 baby-room monitor for CO2, temperature and humidity.
 
 ## Architecture
 
@@ -13,10 +14,18 @@ End-to-end temperature monitoring for a compost heap (or soil) with:
   - Optional: `POST /alert` for debug events
   - Optional: `GET /ack?msg_id=...` for idempotency/ack checks
 - Dashboard reads data from the server (Basic Auth protected):
-  - `GET /` (HTML)
+  - `GET /` (monitor chooser)
+  - `GET /soil` (soil dashboard)
+  - `GET /baby` (baby-room dashboard)
   - `GET /api/data`
   - `GET /api/stats`
   - `GET /api/debug`
+
+## Baby Room Monitor
+
+The PlatformIO project is in `firmware/esp32_scd40_baby`. It reads one SCD40 on GPIO 21/22 and posts to `POST /submit/baby` every 30 seconds over local Wi-Fi. Baby readings use a separate `baby_readings` table in the same SQLite database.
+
+Copy `firmware/esp32_scd40_baby/src/config.example.h` to `config.local.h` before uploading. Configure the Wi-Fi credentials, existing ingest token and the Pi endpoint. Local secrets are ignored by Git.
 
 ## Running Locally
 

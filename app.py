@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, jsonify, request, send_from_directory
+from flask import Flask, render_template, render_template_string, jsonify, request, send_from_directory
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -15,7 +15,7 @@ import logging
 # ============ Configuration ============
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(BASE_DIR, "logs")
-DB_PATH = os.path.join(BASE_DIR, "temperature_data.db")
+DB_PATH = os.environ.get("SOIL_MONITOR_DB_PATH", os.path.join(BASE_DIR, "temperature_data.db"))
 
 def _load_or_create_secret(env_var, file_name, length=32):
     value = os.environ.get(env_var)
@@ -430,12 +430,131 @@ class TemperatureDataManager:
         
         return stats
 
+
+class BabyDataManager:
+    def __init__(self):
+        self.init_database()
+
+    def init_database(self):
+        conn = get_db_connection()
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS baby_readings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                msg_id TEXT NOT NULL UNIQUE,
+                device_id TEXT NOT NULL,
+                co2_ppm INTEGER NOT NULL,
+                temperature_c REAL NOT NULL,
+                humidity_rh REAL NOT NULL,
+                rssi INTEGER,
+                firmware_version TEXT
+            )
+        ''')
+        conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_baby_timestamp
+            ON baby_readings(timestamp)
+        ''')
+        conn.commit()
+        conn.close()
+
+    def add_reading(self, msg_id, device_id, co2_ppm, temperature_c,
+                    humidity_rh, rssi=None, firmware_version=None):
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR IGNORE INTO baby_readings
+                (msg_id, device_id, co2_ppm, temperature_c, humidity_rh,
+                 rssi, firmware_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            str(msg_id)[:96], str(device_id)[:64], co2_ppm, temperature_c,
+            humidity_rh, rssi, str(firmware_version or "")[:48]
+        ))
+        inserted = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return inserted
+
+    def get_recent_readings(self, hours=24, limit=1000):
+        hours = max(1, min(int(hours), 24 * 365))
+        limit = max(1, min(int(limit), 5000))
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        cutoff = (now_utc - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+        conn = get_db_connection()
+        rows = conn.execute('''
+            SELECT timestamp, co2_ppm, temperature_c, humidity_rh,
+                   device_id, rssi, firmware_version
+            FROM baby_readings
+            WHERE timestamp >= ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        ''', (cutoff, limit)).fetchall()
+        conn.close()
+        return [
+            {
+                "timestamp": row[0],
+                "co2_ppm": row[1],
+                "temperature_c": row[2],
+                "humidity_rh": row[3],
+                "device_id": row[4],
+                "rssi": row[5],
+                "firmware_version": row[6]
+            }
+            for row in rows
+        ]
+
+    def get_statistics(self, hours=24):
+        hours = max(1, min(int(hours), 24 * 365))
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        cutoff = (now_utc - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+        conn = get_db_connection()
+        row = conn.execute('''
+            SELECT COUNT(*),
+                   MIN(co2_ppm), MAX(co2_ppm), AVG(co2_ppm),
+                   MIN(temperature_c), MAX(temperature_c), AVG(temperature_c),
+                   MIN(humidity_rh), MAX(humidity_rh), AVG(humidity_rh)
+            FROM baby_readings
+            WHERE timestamp >= ?
+        ''', (cutoff,)).fetchone()
+        latest = conn.execute('''
+            SELECT timestamp, co2_ppm, temperature_c, humidity_rh,
+                   device_id, rssi, firmware_version
+            FROM baby_readings
+            ORDER BY timestamp DESC
+            LIMIT 1
+        ''').fetchone()
+        conn.close()
+
+        if not latest:
+            return {"count": 0, "latest": None, "co2": None, "temperature": None, "humidity": None}
+
+        latest_time = datetime.fromisoformat(latest[0])
+        age_seconds = max(0, int((now_utc - latest_time).total_seconds()))
+        return {
+            "count": row[0],
+            "latest": {
+                "timestamp": latest[0],
+                "co2_ppm": latest[1],
+                "temperature_c": latest[2],
+                "humidity_rh": latest[3],
+                "device_id": latest[4],
+                "rssi": latest[5],
+                "firmware_version": latest[6],
+                "age_seconds": age_seconds,
+                "online": age_seconds <= 120
+            },
+            "co2": {"min": row[1], "max": row[2], "avg": round(row[3], 1)},
+            "temperature": {"min": row[4], "max": row[5], "avg": round(row[6], 1)},
+            "humidity": {"min": row[7], "max": row[8], "avg": round(row[9], 1)}
+        }
+
 # ============ Flask App ============
 app = Flask(__name__)
 configure_request_logging()
 app.secret_key = SECRET_KEY
 
 data_manager = TemperatureDataManager()
+baby_data_manager = BabyDataManager()
 
 # ============ Routes ============
 @app.route("/submit", methods=["POST"])
@@ -477,6 +596,36 @@ def submit():
         else:
             return jsonify({"status": "error", "message": "No valid temperature data"}), 400
             
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+
+@app.route("/submit/baby", methods=["POST"])
+@require_ingest_token
+def submit_baby():
+    try:
+        data = request.get_json(force=True)
+        if not isinstance(data, dict):
+            return jsonify({"status": "error", "message": "JSON object required"}), 400
+
+        msg_id = str(data.get("msg_id") or "").strip()
+        device_id = str(data.get("device_id") or "").strip()
+        co2_ppm = validate_number(data.get("co2_ppm"), 0, 40000, integer=True)
+        temperature_c = validate_number(data.get("temperature_c"), -10, 60)
+        humidity_rh = validate_number(data.get("humidity_rh"), 0, 100)
+        rssi = validate_number(data.get("rssi"), -127, 0, integer=True, optional=True)
+
+        if not msg_id or not device_id:
+            return jsonify({"status": "error", "message": "msg_id and device_id are required"}), 400
+        if co2_ppm is None or temperature_c is None or humidity_rh is None:
+            return jsonify({"status": "error", "message": "Invalid SCD40 reading"}), 400
+
+        inserted = baby_data_manager.add_reading(
+            msg_id, device_id, co2_ppm, temperature_c, humidity_rh,
+            rssi, data.get("firmware_version")
+        )
+        message = "Reading recorded" if inserted else "Duplicate msg_id ignored"
+        return jsonify({"status": "ok", "message": message}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
 
@@ -612,12 +761,39 @@ def health_check():
             "timestamp": datetime.now().isoformat()
         }), 500
 
+
+@app.route("/api/baby/data")
+@require_auth
+def get_baby_data():
+    hours = request.args.get("hours", 24, type=int)
+    limit = request.args.get("limit", 1000, type=int)
+    return jsonify(baby_data_manager.get_recent_readings(hours, limit))
+
+
+@app.route("/api/baby/stats")
+@require_auth
+def get_baby_stats():
+    hours = request.args.get("hours", 24, type=int)
+    return jsonify(baby_data_manager.get_statistics(hours))
+
 def validate_temp(val):
     """Validate temperature values"""
     try:
         v = float(val)
         if -10 <= v <= 80:
             return v
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def validate_number(value, minimum, maximum, integer=False, optional=False):
+    if value is None and optional:
+        return None
+    try:
+        number = float(value)
+        if minimum <= number <= maximum:
+            return int(number) if integer else round(number, 2)
     except (TypeError, ValueError):
         pass
     return None
@@ -1664,7 +1840,19 @@ DEBUG_TEMPLATE = """
 @app.route("/")
 @require_auth
 def index():
+    return render_template("landing.html")
+
+
+@app.route("/soil")
+@require_auth
+def soil_dashboard():
     return render_template_string(TEMPLATE)
+
+
+@app.route("/baby")
+@require_auth
+def baby_dashboard():
+    return render_template("baby.html")
 
 @app.route("/debug-view")
 @require_auth
