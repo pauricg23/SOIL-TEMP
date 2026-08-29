@@ -418,17 +418,21 @@
         async function refreshDashboard() {
             const hours = document.getElementById("hours").value;
             try {
-                const [statsResponse, dataResponse] = await Promise.all([
+                const [statsResponse, chartResponse, recentResponse] = await Promise.all([
                     fetch(`/api/baby/stats?hours=${hours}`),
-                    fetch(`/api/baby/data?hours=${hours}&limit=1500`)
+                    fetch(`/api/baby/chart?hours=${hours}&max_points=1500`),
+                    fetch("/api/baby/data?hours=24&limit=12")
                 ]);
-                if (!statsResponse.ok || !dataResponse.ok) throw new Error("Dashboard request failed");
+                if (!statsResponse.ok || !chartResponse.ok || !recentResponse.ok) {
+                    throw new Error("Dashboard request failed");
+                }
                 const stats = await statsResponse.json();
-                const rows = await dataResponse.json();
+                const chartRows = await chartResponse.json();
+                const recentRows = await recentResponse.json();
                 if (stats.latest) updateCurrent(stats.latest);
                 updateStats(stats);
-                updateCharts(rows);
-                updateTable(rows);
+                updateCharts(chartRows);
+                updateTable(recentRows);
             } catch (error) {
                 const badge = document.getElementById("onlineBadge");
                 badge.className = "online offline";

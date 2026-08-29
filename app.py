@@ -1,6 +1,7 @@
 from flask import Flask, render_template, render_template_string, jsonify, request, send_from_directory
 from datetime import datetime, timedelta, timezone
 import json
+import math
 import os
 import sqlite3
 from collections import defaultdict
@@ -503,6 +504,35 @@ class BabyDataManager:
             for row in rows
         ]
 
+    def get_chart_readings(self, hours=24, max_points=1500):
+        hours = max(1, min(int(hours), 24 * 365))
+        max_points = max(100, min(int(max_points), 5000))
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        cutoff = (now_utc - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+        bucket_seconds = max(30, math.ceil(hours * 3600 / (max_points - 1)))
+        bucket_seconds = math.ceil(bucket_seconds / 30) * 30
+
+        conn = get_db_connection()
+        rows = conn.execute('''
+            SELECT MAX(timestamp),
+                   CAST(ROUND(AVG(co2_ppm)) AS INTEGER),
+                   AVG(temperature_c), AVG(humidity_rh)
+            FROM baby_readings
+            WHERE timestamp >= ?
+            GROUP BY CAST(strftime('%s', timestamp) AS INTEGER) / ?
+            ORDER BY MAX(timestamp) DESC
+        ''', (cutoff, bucket_seconds)).fetchall()
+        conn.close()
+        return [
+            {
+                "timestamp": row[0],
+                "co2_ppm": row[1],
+                "temperature_c": round(row[2], 2),
+                "humidity_rh": round(row[3], 2)
+            }
+            for row in rows
+        ]
+
     def get_statistics(self, hours=24):
         hours = max(1, min(int(hours), 24 * 365))
         now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -768,6 +798,14 @@ def get_baby_data():
     hours = request.args.get("hours", 24, type=int)
     limit = request.args.get("limit", 1000, type=int)
     return jsonify(baby_data_manager.get_recent_readings(hours, limit))
+
+
+@app.route("/api/baby/chart")
+@require_auth
+def get_baby_chart():
+    hours = request.args.get("hours", 24, type=int)
+    max_points = request.args.get("max_points", 1500, type=int)
+    return jsonify(baby_data_manager.get_chart_readings(hours, max_points))
 
 
 @app.route("/api/baby/stats")

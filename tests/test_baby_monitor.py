@@ -3,6 +3,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 
 
 TEST_DIR = tempfile.mkdtemp(prefix="soil-monitor-tests-")
@@ -82,6 +83,39 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertEqual(stats.status_code, 200)
         self.assertEqual(data.get_json()[0]["co2_ppm"], 612)
         self.assertTrue(stats.get_json()["latest"]["online"])
+
+    def test_baby_chart_spans_history_and_limits_points(self):
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        rows = []
+        for index in range(7 * 24 * 12):
+            timestamp = now_utc - timedelta(minutes=index * 5)
+            rows.append((
+                timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                f"history-{index}", "baby-room-esp32", 600 + index % 100,
+                18.0 + index % 10 / 10, 45.0 + index % 20 / 10, -60,
+                "BABY_SCD40_1.1.0"
+            ))
+
+        conn = sqlite3.connect(TEST_DB)
+        conn.executemany('''
+            INSERT INTO baby_readings
+                (timestamp, msg_id, device_id, co2_ppm, temperature_c,
+                 humidity_rh, rssi, firmware_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', rows)
+        conn.commit()
+        conn.close()
+
+        response = self.client.get(
+            "/api/baby/chart?hours=168&max_points=100",
+            headers=self.auth_headers()
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertLessEqual(len(data), 100)
+        self.assertGreater(len(data), 90)
+        oldest = datetime.fromisoformat(data[-1]["timestamp"])
+        self.assertLess(oldest, now_utc - timedelta(days=6))
 
     def test_landing_baby_and_soil_pages_are_available(self):
         headers = self.auth_headers()
