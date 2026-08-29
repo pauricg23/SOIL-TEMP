@@ -87,12 +87,11 @@
         .egg.red { background: var(--red); }
         .egg-value { font-size: 3rem; font-weight: 850; letter-spacing: -.06em; }
         .egg-label { margin-top: 3px; font-weight: 750; }
-        .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-bottom: 22px; }
+        .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; margin-bottom: 22px; }
         .metric { padding: 24px; }
         .metric-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 14px; margin-bottom: 18px; font-size: 1.25rem; }
         .co2 .metric-icon { background: var(--mint); }
         .humidity .metric-icon { background: var(--sky); }
-        .signal .metric-icon { background: var(--lavender); }
         .metric-label { color: var(--muted); font-size: .88rem; font-weight: 750; }
         .metric-value { margin-top: 4px; font-size: 2rem; font-weight: 850; letter-spacing: -.04em; }
         .metric-status { display: inline-block; margin-top: 10px; padding: 5px 10px; border-radius: 999px; background: #eef0f3; font-size: .78rem; font-weight: 800; }
@@ -117,13 +116,6 @@
         .stat { padding: 12px; border-radius: 14px; background: #f8f6fb; text-align: center; }
         .stat strong { display: block; font-size: 1.05rem; }
         .stat span { color: var(--muted); font-size: .75rem; }
-        .recent { padding: 26px; overflow: hidden; }
-        .table-wrap { overflow-x: auto; }
-        table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-        th, td { padding: 13px 10px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
-        th { color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; }
-        td { font-size: .9rem; }
-        .empty { color: var(--muted); text-align: center; padding: 30px; }
         @media (max-width: 820px) {
             .hero, .guide, .charts { grid-template-columns: 1fr; }
             .grid { grid-template-columns: 1fr; }
@@ -131,7 +123,7 @@
         }
         @media (max-width: 520px) {
             .shell { width: min(94vw, 1180px); }
-            .welcome, .guide, .recent { padding: 22px; }
+            .welcome, .guide { padding: 22px; }
             .welcome::after { display: none; }
             .nav-links { gap: 10px; font-size: .88rem; }
         }
@@ -171,12 +163,6 @@
                 <div class="metric-label">Relative humidity</div>
                 <div id="humidityValue" class="metric-value">--%</div>
                 <div id="humidityStatus" class="metric-status">Waiting</div>
-            </article>
-            <article class="card metric signal">
-                <div class="metric-icon">✦</div>
-                <div class="metric-label">Sensor connection</div>
-                <div id="signalValue" class="metric-value">-- dBm</div>
-                <div id="signalStatus" class="metric-status">Waiting</div>
             </article>
         </section>
 
@@ -229,15 +215,6 @@
             </article>
         </section>
 
-        <section class="card recent">
-            <h2>Recent readings</h2>
-            <div class="table-wrap">
-                <table>
-                    <thead><tr><th>Time</th><th>Temperature</th><th>Humidity</th><th>CO₂</th><th>Signal</th></tr></thead>
-                    <tbody id="recentRows"><tr><td colspan="5" class="empty">Waiting for sensor data…</td></tr></tbody>
-                </table>
-            </div>
-        </section>
     </div>
 
     <script>
@@ -308,7 +285,6 @@
             document.getElementById("temperatureLabel").textContent = labels[band];
             document.getElementById("co2Value").textContent = `${latest.co2_ppm} ppm`;
             document.getElementById("humidityValue").textContent = `${latest.humidity_rh.toFixed(1)}%`;
-            document.getElementById("signalValue").textContent = latest.rssi === null ? "-- dBm" : `${latest.rssi} dBm`;
 
             if (latest.co2_ppm < 800) setStatus("co2Status", "Fresh", "good");
             else if (latest.co2_ppm <= 1000) setStatus("co2Status", "Ventilation rising", "caution");
@@ -317,11 +293,6 @@
             if (latest.humidity_rh >= 40 && latest.humidity_rh <= 60) setStatus("humidityStatus", "Comfortable", "good");
             else if (latest.humidity_rh >= 30 && latest.humidity_rh <= 70) setStatus("humidityStatus", "Outside ideal range", "caution");
             else setStatus("humidityStatus", "Needs attention", "alert");
-
-            if (latest.rssi === null) setStatus("signalStatus", "No signal reading", "caution");
-            else if (latest.rssi >= -67) setStatus("signalStatus", "Strong", "good");
-            else if (latest.rssi >= -80) setStatus("signalStatus", "Fair", "caution");
-            else setStatus("signalStatus", "Weak", "alert");
 
             const badge = document.getElementById("onlineBadge");
             badge.className = latest.online ? "online" : "online offline";
@@ -399,40 +370,21 @@
             });
         }
 
-        function updateTable(rows) {
-            const body = document.getElementById("recentRows");
-            if (!rows.length) {
-                body.innerHTML = '<tr><td colspan="5" class="empty">No readings yet</td></tr>';
-                return;
-            }
-            body.innerHTML = rows.slice(0, 12).map(row => `
-                <tr>
-                    <td>${formatTime(row.timestamp)}</td>
-                    <td>${row.temperature_c.toFixed(1)}°C</td>
-                    <td>${row.humidity_rh.toFixed(1)}%</td>
-                    <td>${row.co2_ppm} ppm</td>
-                    <td>${row.rssi === null ? "--" : `${row.rssi} dBm`}</td>
-                </tr>`).join("");
-        }
-
         async function refreshDashboard() {
             const hours = document.getElementById("hours").value;
             try {
-                const [statsResponse, chartResponse, recentResponse] = await Promise.all([
+                const [statsResponse, chartResponse] = await Promise.all([
                     fetch(`/api/baby/stats?hours=${hours}`),
-                    fetch(`/api/baby/chart?hours=${hours}&max_points=1500`),
-                    fetch("/api/baby/data?hours=24&limit=12")
+                    fetch(`/api/baby/chart?hours=${hours}&max_points=1500`)
                 ]);
-                if (!statsResponse.ok || !chartResponse.ok || !recentResponse.ok) {
+                if (!statsResponse.ok || !chartResponse.ok) {
                     throw new Error("Dashboard request failed");
                 }
                 const stats = await statsResponse.json();
                 const chartRows = await chartResponse.json();
-                const recentRows = await recentResponse.json();
                 if (stats.latest) updateCurrent(stats.latest);
                 updateStats(stats);
                 updateCharts(chartRows);
-                updateTable(recentRows);
             } catch (error) {
                 const badge = document.getElementById("onlineBadge");
                 badge.className = "online offline";

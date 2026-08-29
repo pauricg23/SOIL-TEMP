@@ -127,6 +127,8 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertIn(b'id="temperatureChart"', baby.data)
         self.assertIn(b'id="humidityChart"', baby.data)
         self.assertIn(b'id="co2Chart"', baby.data)
+        self.assertNotIn(b'id="signalValue"', baby.data)
+        self.assertNotIn(b"Recent readings", baby.data)
         self.assertIn(b"Soil Monitor", soil.data)
 
 
