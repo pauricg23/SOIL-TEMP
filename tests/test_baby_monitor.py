@@ -123,8 +123,20 @@ class BabyMonitorTest(unittest.TestCase):
             "/api/baby/events", json={"event_type": "got_up"},
             headers=self.auth_headers()
         )
+        heating_on = self.client.post(
+            "/api/baby/events", json={"event_type": "heating_on"},
+            headers=self.auth_headers()
+        )
+        heating_off = self.client.post(
+            "/api/baby/events", json={"event_type": "heating_off"},
+            headers=self.auth_headers()
+        )
         self.assertEqual(bedtime.status_code, 201)
         self.assertEqual(got_up.status_code, 201)
+        self.assertEqual(heating_on.status_code, 201)
+        self.assertEqual(heating_on.get_json()["label"], "Heating on")
+        self.assertEqual(heating_off.status_code, 201)
+        self.assertEqual(heating_off.get_json()["label"], "Heating off")
 
         now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
         start = now_utc - timedelta(hours=9)

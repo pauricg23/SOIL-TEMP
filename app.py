@@ -441,7 +441,9 @@ class BabyDataManager:
         "got_up": "Got up",
         "window_opened": "Window opened",
         "dehumidifier_on": "Dehumidifier on",
-        "dehumidifier_off": "Dehumidifier off"
+        "dehumidifier_off": "Dehumidifier off",
+        "heating_on": "Heating on",
+        "heating_off": "Heating off"
     }
 
     def __init__(self):
