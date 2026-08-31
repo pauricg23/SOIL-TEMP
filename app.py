@@ -775,9 +775,15 @@ class BabyDataManager:
             start, end, completed = self._estimated_night_window(now_utc)
 
         summary = self._summarize_window(conn, start, end)
-        previous = self._summarize_window(
-            conn, start - timedelta(days=1), end - timedelta(days=1)
-        )
+        previous_nights = [
+            previous
+            for day_offset in range(1, 6)
+            if (previous := self._summarize_window(
+                conn,
+                start - timedelta(days=day_offset),
+                end - timedelta(days=day_offset)
+            ))
+        ]
         conn.close()
         if not summary:
             return None
@@ -786,9 +792,11 @@ class BabyDataManager:
             "end": end.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
             "source": source,
             "completed": completed,
-            "comparison": None
+            "comparison": None,
+            "rolling_comparison": None
         })
-        if previous:
+        if previous_nights:
+            previous = previous_nights[0]
             summary["comparison"] = {
                 "temperature_avg_delta": round(
                     summary["temperature"]["avg"] - previous["temperature"]["avg"], 1
@@ -797,6 +805,31 @@ class BabyDataManager:
                     summary["humidity"]["avg"] - previous["humidity"]["avg"], 1
                 ),
                 "co2_avg_delta": round(summary["co2"]["avg"] - previous["co2"]["avg"])
+            }
+            previous_temperatures = [night["temperature"]["avg"] for night in previous_nights]
+            baseline_temperature = statistics.mean(previous_temperatures)
+            if summary["temperature"]["avg"] < min(previous_temperatures):
+                temperature_position = "coldest"
+            elif summary["temperature"]["avg"] > max(previous_temperatures):
+                temperature_position = "warmest"
+            else:
+                temperature_position = "within_range"
+            summary["rolling_comparison"] = {
+                "nights": len(previous_nights),
+                "temperature_position": temperature_position,
+                "temperature_avg_delta": round(
+                    summary["temperature"]["avg"] - baseline_temperature, 1
+                ),
+                "humidity_avg_delta": round(
+                    summary["humidity"]["avg"] - statistics.mean(
+                        night["humidity"]["avg"] for night in previous_nights
+                    ), 1
+                ),
+                "co2_avg_delta": round(
+                    summary["co2"]["avg"] - statistics.mean(
+                        night["co2"]["avg"] for night in previous_nights
+                    )
+                )
             }
         return summary
 

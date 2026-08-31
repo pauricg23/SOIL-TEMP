@@ -218,6 +218,16 @@ class BabyMonitorTest(unittest.TestCase):
                 "baby-room-esp32", 850 + index * 10, 18.0, 52.0, -60,
                 "BABY_SCD40_1.2.0", 1000 + index * 3600, "power_on", 0
             ))
+        for day_offset in range(1, 6):
+            for index in range(9):
+                timestamp = start - timedelta(days=day_offset) + timedelta(hours=index)
+                rows.append((
+                    timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    f"previous-{day_offset}-{index}", "baby-room-esp32",
+                    900 + day_offset * 10, 19.0 + day_offset / 10, 50.0,
+                    -60, "BABY_SCD40_1.2.0", 1000 + index * 3600,
+                    "power_on", 0
+                ))
         conn.executemany('''
             INSERT INTO baby_readings
                 (timestamp, msg_id, device_id, co2_ppm, temperature_c,
@@ -234,6 +244,11 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertEqual(summary["source"], "recorded")
         self.assertEqual(summary["temperature"]["ideal_pct"], 100)
         self.assertEqual(summary["co2"]["below_1000_pct"], 100)
+        self.assertEqual(summary["rolling_comparison"]["nights"], 5)
+        self.assertEqual(
+            summary["rolling_comparison"]["temperature_position"], "coldest"
+        )
+        self.assertLess(summary["rolling_comparison"]["temperature_avg_delta"], 0)
 
     def test_baby_csv_export(self):
         self.client.post("/submit/baby", json=self.valid_reading(), headers=self.ingest_headers())

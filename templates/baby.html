@@ -237,6 +237,7 @@
                 <div class="summary-item"><span>CO₂ fresh-air time</span><strong>--</strong></div>
             </div>
             <p id="nightComparison" class="comparison"></p>
+            <p id="nightTrend" class="comparison"></p>
         </section>
 
         <section class="card events">
@@ -677,12 +678,35 @@
             const comparison = summary.comparison;
             if (!comparison) {
                 document.getElementById("nightComparison").textContent = "More nights will unlock night-to-night comparisons.";
+            } else {
+                const co2Direction = comparison.co2_avg_delta === 0 ? "the same as" :
+                    `${Math.abs(comparison.co2_avg_delta)} ppm ${comparison.co2_avg_delta < 0 ? "lower" : "higher"} than`;
+                document.getElementById("nightComparison").textContent =
+                    `Compared with the previous night: CO₂ was ${co2Direction} before; humidity changed by ${comparison.humidity_avg_delta > 0 ? "+" : ""}${comparison.humidity_avg_delta}%.`;
+            }
+
+            const rolling = summary.rolling_comparison;
+            const trend = document.getElementById("nightTrend");
+            if (!rolling) {
+                trend.textContent = "Five-night trends will appear as more overnight data is collected.";
                 return;
             }
-            const co2Direction = comparison.co2_avg_delta === 0 ? "the same as" :
-                `${Math.abs(comparison.co2_avg_delta)} ppm ${comparison.co2_avg_delta < 0 ? "lower" : "higher"} than`;
-            document.getElementById("nightComparison").textContent =
-                `Compared with the previous night: CO₂ was ${co2Direction} before; humidity changed by ${comparison.humidity_avg_delta > 0 ? "+" : ""}${comparison.humidity_avg_delta}%.`;
+            const nightsLabel = rolling.nights === 1 ? "previous night" : `previous ${rolling.nights} nights`;
+            const temperatureDifference = Math.abs(rolling.temperature_avg_delta).toFixed(1);
+            let temperatureText;
+            if (rolling.temperature_position === "coldest") {
+                temperatureText = `This was the coldest of the last ${rolling.nights + 1} nights, averaging ${temperatureDifference}°C cooler than the ${nightsLabel}`;
+            } else if (rolling.temperature_position === "warmest") {
+                temperatureText = `This was the warmest of the last ${rolling.nights + 1} nights, averaging ${temperatureDifference}°C warmer than the ${nightsLabel}`;
+            } else if (rolling.temperature_avg_delta === 0) {
+                temperatureText = `Temperature matched the ${nightsLabel} average`;
+            } else {
+                temperatureText = `Temperature was ${temperatureDifference}°C ${rolling.temperature_avg_delta < 0 ? "cooler" : "warmer"} than the ${nightsLabel} average`;
+            }
+            const humidityText = rolling.humidity_avg_delta === 0
+                ? `humidity matched the ${nightsLabel} average`
+                : `humidity was ${Math.abs(rolling.humidity_avg_delta).toFixed(1)}% ${rolling.humidity_avg_delta < 0 ? "lower" : "higher"} than the ${nightsLabel} average`;
+            trend.textContent = `${temperatureText}; ${humidityText}.`;
         }
 
         function updateEvents(events) {
