@@ -159,7 +159,7 @@ class BabyMonitorTest(unittest.TestCase):
         end_local = now_local.replace(hour=9, minute=0, second=0, microsecond=0)
         if now_local.hour < 9:
             end_local -= timedelta(days=1)
-        start_local = (end_local - timedelta(days=1)).replace(hour=20)
+        start_local = (end_local - timedelta(days=1)).replace(hour=23)
         temperatures = [8.0, 10.0, 11.0, 12.0, 13.0, 14.0]
         timestamps = [
             (start_local - timedelta(days=day_offset) + timedelta(hours=2))
@@ -271,6 +271,15 @@ class BabyMonitorTest(unittest.TestCase):
         )
         self.assertLess(summary["rolling_comparison"]["temperature_avg_delta"], 0)
 
+    def test_estimated_night_window_runs_eleven_to_nine(self):
+        now_utc = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+        start, end, completed = monitor_app.BabyDataManager._estimated_night_window(now_utc)
+        dublin = monitor_app.ZoneInfo("Europe/Dublin")
+        self.assertEqual(start.astimezone(dublin).hour, 23)
+        self.assertEqual(end.astimezone(dublin).hour, 9)
+        self.assertEqual((end - start).total_seconds(), 10 * 3600)
+        self.assertTrue(completed)
+
     def test_baby_csv_export(self):
         self.client.post("/submit/baby", json=self.valid_reading(), headers=self.ingest_headers())
         response = self.client.get("/api/baby/export.csv?hours=24", headers=self.auth_headers())
@@ -324,6 +333,8 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertIn(b'id="co2Chart"', baby.data)
         self.assertIn(b'id="outsideValue"', baby.data)
         self.assertIn(b'id="outsideTrend"', baby.data)
+        self.assertIn(b"Estimated 11pm\xe2\x80\x939am", baby.data)
+        self.assertIn(b'window.addEventListener("pageshow", closeExpandedChart)', baby.data)
         self.assertIn(b'data-chart-card="temperature"', baby.data)
         self.assertIn(b'class="expand-chart"', baby.data)
         self.assertIn(b'id="nightSummary"', baby.data)

@@ -381,7 +381,7 @@
                 ctx.fillStyle = "rgba(86, 72, 122, .045)";
                 timestamps.forEach((timestamp, index) => {
                     const hour = parseTimestamp(timestamp).getHours();
-                    if (hour < 7 || hour >= 19) {
+                    if (hour < 9 || hour >= 23) {
                         const left = index === 0 ? chartArea.left : (x.getPixelForValue(index - 1) + x.getPixelForValue(index)) / 2;
                         const right = index === timestamps.length - 1 ? chartArea.right : (x.getPixelForValue(index) + x.getPixelForValue(index + 1)) / 2;
                         ctx.fillRect(left, chartArea.top, right - left, chartArea.height);
@@ -727,7 +727,7 @@
                 `${formatTime(summary.start)} to ${formatClock(summary.end)} · ${summary.duration_hours} hours`;
             document.getElementById("nightSource").textContent = summary.source === "recorded"
                 ? (summary.completed ? "Recorded times" : "Night in progress")
-                : "Estimated 8pm–9am";
+                : "Estimated 11pm–9am";
             document.getElementById("nightSummary").innerHTML = [
                 ["Temperature", `${summary.temperature.avg.toFixed(1)}°C`, `${summary.temperature.ideal_pct}% in 16–20°`],
                 ["Humidity", `${summary.humidity.avg.toFixed(1)}%`, `${summary.humidity.ideal_pct}% comfortable`],
@@ -844,6 +844,8 @@
         document.addEventListener("keydown", event => {
             if (event.key === "Escape") closeExpandedChart();
         });
+        window.addEventListener("pagehide", closeExpandedChart);
+        window.addEventListener("pageshow", closeExpandedChart);
         refreshDashboard();
         refreshOutsideWeather();
         setInterval(refreshDashboard, 30000);

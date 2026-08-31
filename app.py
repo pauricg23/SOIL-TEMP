@@ -843,7 +843,7 @@ class BabyDataManager:
         else:
             end_local = today_at_nine
         start_local = (end_local - timedelta(days=1)).replace(
-            hour=20, minute=0, second=0, microsecond=0
+            hour=23, minute=0, second=0, microsecond=0
         )
         return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc), now_local.hour >= 9
 
@@ -983,7 +983,7 @@ class WeatherService:
         if now_local.hour < 9:
             end_local -= timedelta(days=1)
         start_local = (end_local - timedelta(days=1)).replace(
-            hour=20, minute=0, second=0, microsecond=0
+            hour=23, minute=0, second=0, microsecond=0
         )
 
         nightly_averages = []
