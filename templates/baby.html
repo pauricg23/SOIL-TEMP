@@ -871,7 +871,7 @@
                 });
                 const event = await response.json();
                 if (!response.ok) throw new Error(event.error || "Could not save room activity");
-                feedback.textContent = `${event.label} saved at ${formatClock(event.timestamp)}.`;
+                feedback.textContent = `${event.label} saved for ${formatTime(event.timestamp)}.`;
                 document.getElementById("eventTime").value = "";
                 await refreshDashboard();
             } catch (error) {
