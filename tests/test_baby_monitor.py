@@ -221,6 +221,20 @@ class BabyMonitorTest(unittest.TestCase):
             },
             headers=self.auth_headers()
         )
+        dublin = monitor_app.ZoneInfo("Europe/Dublin")
+        chosen_local_time = (now_utc.astimezone(dublin) - timedelta(hours=3)).replace(
+            second=0, microsecond=0
+        )
+        local_time_event = self.client.post(
+            "/api/baby/events",
+            json={
+                "event_type": "dehumidifier_on",
+                "occurred_at": chosen_local_time.replace(tzinfo=None).isoformat(
+                    timespec="minutes"
+                )
+            },
+            headers=self.auth_headers()
+        )
 
         self.assertEqual(heating_on.status_code, 201)
         self.assertEqual(
@@ -231,6 +245,13 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertEqual(window_opened.status_code, 201)
         self.assertEqual(window_closed.get_json()["label"], "Window closed")
         self.assertEqual(future.status_code, 400)
+        self.assertEqual(local_time_event.status_code, 201)
+        self.assertEqual(
+            local_time_event.get_json()["timestamp"],
+            chosen_local_time.astimezone(timezone.utc).replace(tzinfo=None).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+        )
 
         states = self.client.get(
             "/api/baby/event-states", headers=self.auth_headers()
@@ -431,6 +452,8 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertIn(b'data-toggle="dehumidifier"', baby.data)
         self.assertIn(b'data-toggle="heating"', baby.data)
         self.assertIn(b'id="eventTime"', baby.data)
+        self.assertIn(b"occurredAt = chosenTime", baby.data)
+        self.assertIn(b"The next change will be saved for", baby.data)
         self.assertNotIn(b'data-event="heating_off"', baby.data)
         self.assertIn(b'id="exportLink"', baby.data)
         self.assertIn(b'id="healthUptime"', baby.data)

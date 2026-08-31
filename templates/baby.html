@@ -898,15 +898,12 @@
                 const config = eventToggleConfig[toggleName];
                 const currentlyActive = button.getAttribute("aria-checked") === "true";
                 const eventType = currentlyActive ? config.offEvent : config.onEvent;
-                const chosenTime = document.getElementById("eventTime").value;
+                const timeInput = document.getElementById("eventTime");
+                const chosenTime = timeInput.value;
                 let occurredAt = null;
                 if (chosenTime) {
-                    const parsedTime = new Date(chosenTime);
-                    if (Number.isNaN(parsedTime.getTime())) throw new Error("Please choose a valid date and time.");
-                    if (parsedTime.getTime() > Date.now() + 5 * 60 * 1000) {
-                        throw new Error("The event time cannot be in the future.");
-                    }
-                    occurredAt = parsedTime.toISOString();
+                    if (!timeInput.checkValidity()) throw new Error("Please choose a valid earlier date and time.");
+                    occurredAt = chosenTime;
                 }
                 const response = await fetch("/api/baby/events", {
                     method: "POST",
@@ -968,6 +965,14 @@
             document.getElementById("eventFeedback").textContent = "The next change will use the current time.";
         });
         document.getElementById("eventTime").addEventListener("focus", updateEventTimeLimit);
+        document.getElementById("eventTime").addEventListener("change", changeEvent => {
+            const chosenTime = changeEvent.target.value;
+            if (!chosenTime) return;
+            const [datePart, timePart] = chosenTime.split("T");
+            const [year, month, day] = datePart.split("-");
+            document.getElementById("eventFeedback").textContent =
+                `The next change will be saved for ${day}/${month}/${year} at ${timePart}.`;
+        });
         document.getElementById("eventFeed").addEventListener("contextmenu", pointerEvent => {
             const chip = pointerEvent.target.closest("[data-event-id]");
             if (!chip) return;
