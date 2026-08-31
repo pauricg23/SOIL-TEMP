@@ -69,7 +69,8 @@
         .online::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: #57b982; box-shadow: 0 0 0 5px rgba(87,185,130,.14); }
         .online.offline { background: #f9e7e7; }
         .online.offline::before { background: #cf7272; box-shadow: 0 0 0 5px rgba(207,114,114,.14); }
-        .temperature { padding: 26px; display: grid; place-items: center; text-align: center; }
+        .temperature { padding: 26px; display: grid; place-items: center; align-content: center; text-align: center; }
+        .temperature .metric-label { margin-bottom: 14px; }
         .egg {
             width: 180px;
             height: 210px;
@@ -87,17 +88,19 @@
         .egg.red { background: var(--red); }
         .egg-value { font-size: 3rem; font-weight: 850; letter-spacing: -.06em; }
         .egg-label { margin-top: 3px; font-weight: 750; }
-        .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; margin-bottom: 22px; }
+        .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-bottom: 22px; }
         .metric { padding: 24px; }
         .metric-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 14px; margin-bottom: 18px; font-size: 1.25rem; }
         .co2 .metric-icon { background: var(--mint); }
         .humidity .metric-icon { background: var(--sky); }
+        .outside .metric-icon { background: var(--yellow); }
         .metric-label { color: var(--muted); font-size: .88rem; font-weight: 750; }
         .metric-value { margin-top: 4px; font-size: 2rem; font-weight: 850; letter-spacing: -.04em; }
         .metric-status { display: inline-block; margin-top: 10px; padding: 5px 10px; border-radius: 999px; background: #eef0f3; font-size: .78rem; font-weight: 800; }
         .metric-status.good { background: #dcf1e5; color: #397457; }
         .metric-status.caution { background: #fff0d2; color: #95642f; }
         .metric-status.alert { background: #f8dddd; color: #9b4d4d; }
+        .metric-source { display: block; margin-top: 9px; color: var(--muted); font-size: .72rem; }
         .night-summary, .events { padding: 28px; margin-bottom: 22px; }
         .section-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; }
         .summary-source { padding: 6px 10px; border-radius: 999px; background: #f3eefb; color: #78689d; font-size: .74rem; font-weight: 800; }
@@ -124,14 +127,29 @@
         .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
         .toolbar select { width: auto; margin: 0; }
         .toolbar-actions { display: flex; align-items: center; gap: 10px; }
-        .charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-bottom: 22px; }
-        .chart-card { padding: 24px; min-height: 340px; }
-        .chart-card.co2-history { grid-column: 1 / -1; }
-        .chart-wrap { height: 260px; margin-top: 14px; }
-        .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 18px; }
-        .stat { padding: 12px; border-radius: 14px; background: #f8f6fb; text-align: center; }
+        .charts { display: grid; grid-template-columns: 1fr; gap: 18px; margin-bottom: 22px; }
+        .chart-card { padding: 24px; min-height: 420px; }
+        .chart-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+        .chart-heading h2 { margin: 0; }
+        .expand-chart { padding: 8px 12px; background: #f8f6fb; }
+        .chart-wrap { height: 290px; margin-top: 14px; cursor: zoom-in; }
+        .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 18px; }
+        .stat { padding: 12px 8px; border-radius: 14px; background: #f8f6fb; text-align: center; }
         .stat strong { display: block; font-size: 1.05rem; }
-        .stat span { color: var(--muted); font-size: .75rem; }
+        .stat span { display: block; color: var(--muted); font-size: .75rem; }
+        .stat small { display: block; min-height: 2.3em; margin-top: 4px; color: var(--muted); font-size: .66rem; line-height: 1.2; }
+        .chart-backdrop { position: fixed; inset: 0; z-index: 90; background: rgba(44, 38, 58, .48); backdrop-filter: blur(4px); }
+        .chart-backdrop[hidden] { display: none; }
+        body.chart-open { overflow: hidden; }
+        .chart-card.expanded {
+            position: fixed;
+            inset: clamp(10px, 3vw, 34px);
+            z-index: 100;
+            min-height: 0;
+            overflow: auto;
+            background: #fffdfd;
+        }
+        .chart-card.expanded .chart-wrap { height: calc(100vh - 245px); min-height: 380px; cursor: default; }
         .filtered-note { margin: -8px 0 18px; color: var(--muted); font-size: .78rem; }
         .device-health { padding: 18px 24px; color: var(--muted); }
         .device-health summary { cursor: pointer; color: var(--ink); font-weight: 800; }
@@ -152,6 +170,9 @@
             .toolbar { align-items: flex-start; flex-direction: column; }
             .toolbar-actions { width: 100%; }
             .toolbar select { flex: 1; }
+            .stats { grid-template-columns: repeat(2, 1fr); }
+            .chart-card { padding: 18px; }
+            .chart-card.expanded .chart-wrap { height: calc(100vh - 315px); min-height: 360px; }
         }
     </style>
 </head>
@@ -170,6 +191,7 @@
                 <div id="onlineBadge" class="online offline">Waiting for the first reading</div>
             </article>
             <article class="card temperature">
+                <div class="metric-label">Room temperature</div>
                 <div id="temperatureEgg" class="egg yellow">
                     <div id="temperatureValue" class="egg-value">--°</div>
                     <div id="temperatureLabel" class="egg-label">Waiting for sensor</div>
@@ -190,6 +212,13 @@
                 <div id="humidityValue" class="metric-value">--%</div>
                 <div id="humidityStatus" class="metric-status">Waiting</div>
             </article>
+            <article class="card metric outside">
+                <div class="metric-icon">🌦️</div>
+                <div class="metric-label">Outside temperature</div>
+                <div id="outsideValue" class="metric-value">--°C</div>
+                <div id="outsideStatus" class="metric-status">Loading Sligo weather</div>
+                <a class="metric-source" href="https://open-meteo.com/" target="_blank" rel="noreferrer">Weather data: Open-Meteo</a>
+            </article>
         </section>
 
         <section class="card night-summary">
@@ -205,7 +234,7 @@
                 <div class="summary-item"><span>Temperature</span><strong>--</strong></div>
                 <div class="summary-item"><span>Humidity</span><strong>--</strong></div>
                 <div class="summary-item"><span>Average CO₂</span><strong>--</strong></div>
-                <div class="summary-item"><span>Fresh-air time</span><strong>--</strong></div>
+                <div class="summary-item"><span>CO₂ fresh-air time</span><strong>--</strong></div>
             </div>
             <p id="nightComparison" class="comparison"></p>
         </section>
@@ -263,18 +292,18 @@
         <p class="filtered-note">Night shading and event markers add context. Startup and isolated sensor anomalies are excluded from these charts.</p>
 
         <section class="charts">
-            <article class="card chart-card">
-                <h2>Temperature</h2>
+            <article class="card chart-card" data-chart-card="temperature">
+                <div class="chart-heading"><h2>Temperature</h2><button type="button" class="expand-chart" aria-expanded="false">⤢ Expand</button></div>
                 <div class="chart-wrap"><canvas id="temperatureChart"></canvas></div>
                 <div id="temperatureStats" class="stats"></div>
             </article>
-            <article class="card chart-card">
-                <h2>Humidity</h2>
+            <article class="card chart-card" data-chart-card="humidity">
+                <div class="chart-heading"><h2>Humidity</h2><button type="button" class="expand-chart" aria-expanded="false">⤢ Expand</button></div>
                 <div class="chart-wrap"><canvas id="humidityChart"></canvas></div>
                 <div id="humidityStats" class="stats"></div>
             </article>
-            <article class="card chart-card co2-history">
-                <h2>CO₂</h2>
+            <article class="card chart-card" data-chart-card="co2">
+                <div class="chart-heading"><h2>CO₂</h2><button type="button" class="expand-chart" aria-expanded="false">⤢ Expand</button></div>
                 <div class="chart-wrap"><canvas id="co2Chart"></canvas></div>
                 <div id="co2Stats" class="stats"></div>
             </article>
@@ -291,6 +320,7 @@
         </details>
 
     </div>
+    <div id="chartBackdrop" class="chart-backdrop" hidden></div>
 
     <script>
         const guideBands = {
@@ -491,26 +521,84 @@
         }
 
         function statMarkup(items) {
-            return items.map(item => `<div class="stat"><strong>${item.value}</strong><span>${item.label}</span></div>`).join("");
+            return items.map(item => `
+                <div class="stat">
+                    <span>${item.label}</span>
+                    <strong>${item.value}</strong>
+                    <small>${item.detail || "&nbsp;"}</small>
+                </div>
+            `).join("");
         }
 
         function updateStats(stats) {
             if (!stats.latest) return;
             document.getElementById("temperatureStats").innerHTML = statMarkup([
-                {value: `${stats.temperature.min.toFixed(1)}°`, label: "Low"},
-                {value: `${stats.temperature.avg.toFixed(1)}°`, label: "Average"},
-                {value: `${stats.temperature.max.toFixed(1)}°`, label: "High"}
+                {value: `${stats.temperature.current.toFixed(1)}°C`, label: "Current", detail: formatTime(stats.latest.measurement_timestamp)},
+                {value: `${stats.temperature.avg.toFixed(1)}°C`, label: "Average"},
+                {value: `${stats.temperature.min.toFixed(1)}°C`, label: "Low", detail: formatTime(stats.temperature.min_at)},
+                {value: `${stats.temperature.max.toFixed(1)}°C`, label: "High", detail: formatTime(stats.temperature.max_at)}
             ]);
             document.getElementById("humidityStats").innerHTML = statMarkup([
-                {value: `${stats.humidity.min.toFixed(1)}%`, label: "Low"},
+                {value: `${stats.humidity.current.toFixed(1)}%`, label: "Current", detail: formatTime(stats.latest.measurement_timestamp)},
                 {value: `${stats.humidity.avg.toFixed(1)}%`, label: "Average"},
-                {value: `${stats.humidity.max.toFixed(1)}%`, label: "High"}
+                {value: `${stats.humidity.min.toFixed(1)}%`, label: "Low", detail: formatTime(stats.humidity.min_at)},
+                {value: `${stats.humidity.max.toFixed(1)}%`, label: "High", detail: formatTime(stats.humidity.max_at)}
             ]);
             document.getElementById("co2Stats").innerHTML = statMarkup([
-                {value: `${stats.co2.min} ppm`, label: "Low"},
+                {value: `${stats.co2.current} ppm`, label: "Current", detail: formatTime(stats.latest.measurement_timestamp)},
                 {value: `${stats.co2.avg.toFixed(0)} ppm`, label: "Average"},
-                {value: `${stats.co2.max} ppm`, label: "High"}
+                {value: `${stats.co2.min} ppm`, label: "Low", detail: formatTime(stats.co2.min_at)},
+                {value: `${stats.co2.max} ppm`, label: "High", detail: formatTime(stats.co2.max_at)}
             ]);
+        }
+
+        function chartInstance(name) {
+            return {temperature: temperatureChart, humidity: humidityChart, co2: co2Chart}[name];
+        }
+
+        function closeExpandedChart() {
+            const expanded = document.querySelector(".chart-card.expanded");
+            if (!expanded) return;
+            expanded.classList.remove("expanded");
+            const button = expanded.querySelector(".expand-chart");
+            button.textContent = "⤢ Expand";
+            button.setAttribute("aria-expanded", "false");
+            document.getElementById("chartBackdrop").hidden = true;
+            document.body.classList.remove("chart-open");
+            requestAnimationFrame(() => chartInstance(expanded.dataset.chartCard)?.resize());
+        }
+
+        function expandChart(card) {
+            if (card.classList.contains("expanded")) {
+                closeExpandedChart();
+                return;
+            }
+            closeExpandedChart();
+            card.classList.add("expanded");
+            const button = card.querySelector(".expand-chart");
+            button.textContent = "× Close";
+            button.setAttribute("aria-expanded", "true");
+            document.getElementById("chartBackdrop").hidden = false;
+            document.body.classList.add("chart-open");
+            requestAnimationFrame(() => chartInstance(card.dataset.chartCard)?.resize());
+        }
+
+        async function refreshOutsideWeather() {
+            try {
+                const response = await fetch("/api/weather/current");
+                if (!response.ok) throw new Error("Weather unavailable");
+                const weather = await response.json();
+                if (!weather.available) throw new Error("Weather unavailable");
+                document.getElementById("outsideValue").textContent = `${weather.temperature_c.toFixed(1)}°C`;
+                setStatus(
+                    "outsideStatus",
+                    `${weather.label} · ${weather.stale ? "last available" : formatClock(weather.observed_at)}`,
+                    weather.stale ? "caution" : "good"
+                );
+            } catch (_error) {
+                document.getElementById("outsideValue").textContent = "--°C";
+                setStatus("outsideStatus", "Outside weather unavailable", "caution");
+            }
         }
 
         function chartOptions(unit, bands, rows, events) {
@@ -583,7 +671,7 @@
                 ["Temperature", `${summary.temperature.avg.toFixed(1)}°C`, `${summary.temperature.ideal_pct}% in 16–20°`],
                 ["Humidity", `${summary.humidity.avg.toFixed(1)}%`, `${summary.humidity.ideal_pct}% comfortable`],
                 ["Average CO₂", `${summary.co2.avg} ppm`, `High ${summary.co2.max} ppm`],
-                ["Below 1000 ppm", `${summary.co2.below_1000_pct}%`, `${summary.co2.above_1400_pct}% above 1400`]
+                ["CO₂ fresh-air time", `${summary.co2.below_1000_pct}%`, `Below 1000 ppm · ${summary.co2.above_1400_pct}% above 1400`]
             ].map(item => `<div class="summary-item"><span>${item[0]}</span><strong>${item[1]}</strong><span>${item[2]}</span></div>`).join("");
 
             const comparison = summary.comparison;
@@ -662,8 +750,20 @@
         document.querySelectorAll("[data-event]").forEach(button => {
             button.addEventListener("click", () => recordEvent(button.dataset.event, button));
         });
+        document.querySelectorAll("[data-chart-card]").forEach(card => {
+            card.querySelector(".expand-chart").addEventListener("click", () => expandChart(card));
+            card.querySelector(".chart-wrap").addEventListener("click", () => {
+                if (!card.classList.contains("expanded")) expandChart(card);
+            });
+        });
+        document.getElementById("chartBackdrop").addEventListener("click", closeExpandedChart);
+        document.addEventListener("keydown", event => {
+            if (event.key === "Escape") closeExpandedChart();
+        });
         refreshDashboard();
+        refreshOutsideWeather();
         setInterval(refreshDashboard, 30000);
+        setInterval(refreshOutsideWeather, 10 * 60 * 1000);
     </script>
 </body>
 </html>

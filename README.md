@@ -25,7 +25,7 @@ End-to-end temperature monitoring for a compost heap (or soil) with:
 
 The PlatformIO project is in `firmware/esp32_scd40_baby`. It reads one SCD40 on GPIO 21/22 and posts to `POST /submit/baby` every 30 seconds over local Wi-Fi. Baby readings use a separate `baby_readings` table in the same SQLite database.
 
-The baby dashboard includes time-bucketed history, overnight summaries, room-event markers, startup/outlier filtering, CSV export and device-health details. Raw readings remain in SQLite even when filtered from graphs.
+The baby dashboard includes expandable time-bucketed charts, timestamped high/low summaries, overnight summaries, room-event markers, startup/outlier filtering, cached Sligo-area outside temperature, CSV export and device-health details. Raw readings remain in SQLite even when filtered from graphs.
 
 Copy `firmware/esp32_scd40_baby/src/config.example.h` to `config.local.h` before uploading. Configure the Wi-Fi credentials, existing ingest token and the Pi endpoint. Local secrets are ignored by Git.
 
@@ -61,6 +61,9 @@ Environment overrides:
 - `SOIL_MONITOR_INGEST_TOKEN`
 - `SOIL_MONITOR_USER` (default `admin`)
 - `SOIL_MONITOR_PASSWORD`
+- `SOIL_MONITOR_WEATHER_LAT` (default: approximate Sligo area)
+- `SOIL_MONITOR_WEATHER_LON` (default: approximate Sligo area)
+- `SOIL_MONITOR_WEATHER_LABEL` (default: `Sligo area`)
 
 ## Data Storage
 

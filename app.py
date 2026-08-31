@@ -11,6 +11,8 @@ from collections import defaultdict
 import statistics
 import threading
 import time
+import urllib.parse
+import urllib.request
 from functools import wraps
 import hashlib
 import secrets
@@ -45,6 +47,9 @@ INGEST_TOKEN = _load_or_create_secret("SOIL_MONITOR_INGEST_TOKEN", ".ingest_toke
 DASHBOARD_USER = os.environ.get("SOIL_MONITOR_USER", "admin")
 DASHBOARD_PASSWORD = _load_or_create_secret("SOIL_MONITOR_PASSWORD", ".dashboard_password", 24)
 INGEST_TOKEN_HEADER = "X-INGEST-TOKEN"
+WEATHER_LATITUDE = float(os.environ.get("SOIL_MONITOR_WEATHER_LAT", "54.2766"))
+WEATHER_LONGITUDE = float(os.environ.get("SOIL_MONITOR_WEATHER_LON", "-8.4761"))
+WEATHER_LABEL = os.environ.get("SOIL_MONITOR_WEATHER_LABEL", "Sligo area")
 
 class OnlyPostFilter(logging.Filter):
     def filter(self, record):
@@ -634,6 +639,27 @@ class BabyDataManager:
             ORDER BY timestamp DESC
             LIMIT 1
         ''').fetchone()
+        extrema = {}
+        for metric, column in (
+            ("co2", "co2_ppm"),
+            ("temperature", "temperature_c"),
+            ("humidity", "humidity_rh")
+        ):
+            minimum = conn.execute(f'''
+                SELECT timestamp, {column}
+                FROM baby_readings
+                WHERE timestamp >= ? AND COALESCE(warmup, 0) = 0
+                ORDER BY {column} ASC, timestamp ASC
+                LIMIT 1
+            ''', (cutoff,)).fetchone()
+            maximum = conn.execute(f'''
+                SELECT timestamp, {column}
+                FROM baby_readings
+                WHERE timestamp >= ? AND COALESCE(warmup, 0) = 0
+                ORDER BY {column} DESC, timestamp ASC
+                LIMIT 1
+            ''', (cutoff,)).fetchone()
+            extrema[metric] = {"minimum": minimum, "maximum": maximum}
         conn.close()
 
         if not latest_device or not latest_valid or not row[0]:
@@ -658,9 +684,21 @@ class BabyDataManager:
                 "age_seconds": age_seconds,
                 "online": age_seconds <= 120
             },
-            "co2": {"min": row[1], "max": row[2], "avg": round(row[3], 1)},
-            "temperature": {"min": row[4], "max": row[5], "avg": round(row[6], 1)},
-            "humidity": {"min": row[7], "max": row[8], "avg": round(row[9], 1)}
+            "co2": {
+                "min": row[1], "min_at": extrema["co2"]["minimum"][0],
+                "max": row[2], "max_at": extrema["co2"]["maximum"][0],
+                "avg": round(row[3], 1), "current": latest_valid[1]
+            },
+            "temperature": {
+                "min": row[4], "min_at": extrema["temperature"]["minimum"][0],
+                "max": row[5], "max_at": extrema["temperature"]["maximum"][0],
+                "avg": round(row[6], 1), "current": latest_valid[2]
+            },
+            "humidity": {
+                "min": row[7], "min_at": extrema["humidity"]["minimum"][0],
+                "max": row[8], "max_at": extrema["humidity"]["maximum"][0],
+                "avg": round(row[9], 1), "current": latest_valid[3]
+            }
         }
 
     def add_event(self, event_type, note=None):
@@ -828,6 +866,65 @@ class BabyDataManager:
         conn.close()
         return rows
 
+
+class WeatherService:
+    CACHE_SECONDS = 600
+
+    def __init__(self, latitude, longitude, label):
+        self.latitude = latitude
+        self.longitude = longitude
+        self.label = label
+        self._cached = None
+        self._cached_at = 0
+        self._lock = threading.Lock()
+
+    def get_current(self):
+        now = time.time()
+        with self._lock:
+            if self._cached and now - self._cached_at < self.CACHE_SECONDS:
+                return dict(self._cached)
+            try:
+                query = urllib.parse.urlencode({
+                    "latitude": self.latitude,
+                    "longitude": self.longitude,
+                    "current": "temperature_2m",
+                    "temperature_unit": "celsius",
+                    "timezone": "UTC",
+                    "forecast_days": 1
+                })
+                request_data = urllib.request.Request(
+                    f"https://api.open-meteo.com/v1/forecast?{query}",
+                    headers={"User-Agent": "SoilMonitorDashboard/1.0"}
+                )
+                with urllib.request.urlopen(request_data, timeout=5) as response:
+                    payload = json.load(response)
+                current = payload["current"]
+                observed_at = datetime.fromisoformat(current["time"]).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+                self._cached = {
+                    "available": True,
+                    "temperature_c": round(float(current["temperature_2m"]), 1),
+                    "observed_at": observed_at,
+                    "label": self.label,
+                    "source": "Open-Meteo",
+                    "stale": False
+                }
+                self._cached_at = now
+                return dict(self._cached)
+            except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
+                if self._cached:
+                    stale = dict(self._cached)
+                    stale["stale"] = True
+                    return stale
+                return {
+                    "available": False,
+                    "label": self.label,
+                    "source": "Open-Meteo",
+                    "stale": False
+                }
+
+
 # ============ Flask App ============
 app = Flask(__name__)
 configure_request_logging()
@@ -835,6 +932,7 @@ app.secret_key = SECRET_KEY
 
 data_manager = TemperatureDataManager()
 baby_data_manager = BabyDataManager()
+weather_service = WeatherService(WEATHER_LATITUDE, WEATHER_LONGITUDE, WEATHER_LABEL)
 
 # ============ Routes ============
 @app.route("/submit", methods=["POST"])
@@ -1074,6 +1172,12 @@ def get_baby_chart():
 def get_baby_stats():
     hours = request.args.get("hours", 24, type=int)
     return jsonify(baby_data_manager.get_statistics(hours))
+
+
+@app.route("/api/weather/current")
+@require_auth
+def get_current_weather():
+    return jsonify(weather_service.get_current())
 
 
 @app.route("/api/baby/events", methods=["GET", "POST"])

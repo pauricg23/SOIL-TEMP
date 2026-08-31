@@ -1,9 +1,12 @@
 import base64
+import io
+import json
 import os
 import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 
 
 TEST_DIR = tempfile.mkdtemp(prefix="soil-monitor-tests-")
@@ -106,6 +109,63 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertEqual(len(chart), 1)
         self.assertEqual(chart[0]["temperature_c"], 18.4)
         self.assertEqual(stats["temperature"]["max"], 18.4)
+
+    def test_stats_include_current_and_extrema_timestamps(self):
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+        rows = [
+            (now_utc - timedelta(minutes=30), "extrema-1", 800, 17.0, 48.0),
+            (now_utc - timedelta(minutes=20), "extrema-2", 500, 21.0, 65.0),
+            (now_utc - timedelta(minutes=10), "extrema-3", 650, 19.0, 55.0)
+        ]
+        conn = sqlite3.connect(TEST_DB)
+        conn.executemany('''
+            INSERT INTO baby_readings
+                (timestamp, msg_id, device_id, co2_ppm, temperature_c,
+                 humidity_rh, firmware_version)
+            VALUES (?, ?, 'baby-room-esp32', ?, ?, ?, 'BABY_SCD40_1.1.0')
+        ''', [
+            (timestamp.strftime("%Y-%m-%d %H:%M:%S"), msg_id, co2, temperature, humidity)
+            for timestamp, msg_id, co2, temperature, humidity in rows
+        ])
+        conn.commit()
+        conn.close()
+
+        stats = self.client.get(
+            "/api/baby/stats?hours=1", headers=self.auth_headers()
+        ).get_json()
+        self.assertEqual(stats["co2"]["current"], 650)
+        self.assertEqual(stats["co2"]["min"], 500)
+        self.assertEqual(stats["co2"]["min_at"], rows[1][0].strftime("%Y-%m-%d %H:%M:%S"))
+        self.assertEqual(stats["temperature"]["max_at"], rows[1][0].strftime("%Y-%m-%d %H:%M:%S"))
+        self.assertEqual(stats["humidity"]["min_at"], rows[0][0].strftime("%Y-%m-%d %H:%M:%S"))
+
+    def test_weather_service_caches_current_temperature(self):
+        payload = json.dumps({
+            "current": {"time": "2026-08-31T12:15", "temperature_2m": 14.6}
+        }).encode("utf-8")
+        service = monitor_app.WeatherService(54.27, -8.47, "Sligo area")
+        with mock.patch("urllib.request.urlopen", return_value=io.BytesIO(payload)) as urlopen:
+            first = service.get_current()
+            second = service.get_current()
+        self.assertTrue(first["available"])
+        self.assertEqual(first["temperature_c"], 14.6)
+        self.assertEqual(first["observed_at"], "2026-08-31 12:15:00")
+        self.assertEqual(second, first)
+        urlopen.assert_called_once()
+
+    def test_weather_endpoint_is_authenticated(self):
+        self.assertEqual(self.client.get("/api/weather/current").status_code, 401)
+        weather = {
+            "available": True, "temperature_c": 14.6,
+            "observed_at": "2026-08-31 12:15:00", "label": "Sligo area",
+            "source": "Open-Meteo", "stale": False
+        }
+        with mock.patch.object(monitor_app.weather_service, "get_current", return_value=weather):
+            response = self.client.get(
+                "/api/weather/current", headers=self.auth_headers()
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["temperature_c"], 14.6)
 
     def test_baby_events_and_night_summary(self):
         self.assertEqual(self.client.get("/api/baby/events").status_code, 401)
@@ -226,6 +286,9 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertIn(b'id="temperatureChart"', baby.data)
         self.assertIn(b'id="humidityChart"', baby.data)
         self.assertIn(b'id="co2Chart"', baby.data)
+        self.assertIn(b'id="outsideValue"', baby.data)
+        self.assertIn(b'data-chart-card="temperature"', baby.data)
+        self.assertIn(b'class="expand-chart"', baby.data)
         self.assertIn(b'id="nightSummary"', baby.data)
         self.assertIn(b'data-event="bedtime"', baby.data)
         self.assertIn(b'id="exportLink"', baby.data)
