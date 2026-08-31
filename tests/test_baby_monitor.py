@@ -335,6 +335,8 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertIn(b'id="outsideTrend"', baby.data)
         self.assertIn(b"Estimated 11pm\xe2\x80\x939am", baby.data)
         self.assertIn(b'window.addEventListener("pageshow", closeExpandedChart)', baby.data)
+        self.assertIn(b".chart-wrap canvas", baby.data)
+        self.assertIn(b"function resizeAllCharts()", baby.data)
         self.assertIn(b'data-chart-card="temperature"', baby.data)
         self.assertIn(b'class="expand-chart"', baby.data)
         self.assertIn(b'id="nightSummary"', baby.data)

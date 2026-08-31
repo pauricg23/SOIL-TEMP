@@ -129,11 +129,12 @@
         .toolbar select { width: auto; margin: 0; }
         .toolbar-actions { display: flex; align-items: center; gap: 10px; }
         .charts { display: grid; grid-template-columns: 1fr; gap: 18px; margin-bottom: 22px; }
-        .chart-card { padding: 24px; min-height: 420px; }
+        .chart-card { min-width: 0; padding: 24px; min-height: 420px; overflow: hidden; }
         .chart-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
         .chart-heading h2 { margin: 0; }
         .expand-chart { padding: 8px 12px; background: #f8f6fb; }
-        .chart-wrap { height: 290px; margin-top: 14px; cursor: zoom-in; }
+        .chart-wrap { position: relative; width: 100%; min-width: 0; height: 290px; margin-top: 14px; overflow: hidden; cursor: zoom-in; }
+        .chart-wrap canvas { display: block; width: 100% !important; height: 100% !important; }
         .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 18px; }
         .stat { padding: 12px 8px; border-radius: 14px; background: #f8f6fb; text-align: center; }
         .stat strong { display: block; font-size: 1.05rem; }
@@ -595,20 +596,27 @@
             ]);
         }
 
-        function chartInstance(name) {
-            return {temperature: temperatureChart, humidity: humidityChart, co2: co2Chart}[name];
+        function resizeAllCharts() {
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                [temperatureChart, humidityChart, co2Chart].forEach(chart => {
+                    if (!chart) return;
+                    chart.resize();
+                    chart.update("none");
+                });
+            }));
         }
 
         function closeExpandedChart() {
             const expanded = document.querySelector(".chart-card.expanded");
-            if (!expanded) return;
-            expanded.classList.remove("expanded");
-            const button = expanded.querySelector(".expand-chart");
-            button.textContent = "⤢ Expand";
-            button.setAttribute("aria-expanded", "false");
+            if (expanded) {
+                expanded.classList.remove("expanded");
+                const button = expanded.querySelector(".expand-chart");
+                button.textContent = "⤢ Expand";
+                button.setAttribute("aria-expanded", "false");
+            }
             document.getElementById("chartBackdrop").hidden = true;
             document.body.classList.remove("chart-open");
-            requestAnimationFrame(() => chartInstance(expanded.dataset.chartCard)?.resize());
+            resizeAllCharts();
         }
 
         function expandChart(card) {
@@ -623,7 +631,7 @@
             button.setAttribute("aria-expanded", "true");
             document.getElementById("chartBackdrop").hidden = false;
             document.body.classList.add("chart-open");
-            requestAnimationFrame(() => chartInstance(card.dataset.chartCard)?.resize());
+            resizeAllCharts();
         }
 
         async function refreshOutsideWeather() {
