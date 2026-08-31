@@ -101,6 +101,7 @@
         .metric-status.caution { background: #fff0d2; color: #95642f; }
         .metric-status.alert { background: #f8dddd; color: #9b4d4d; }
         .metric-source { display: block; margin-top: 9px; color: var(--muted); font-size: .72rem; }
+        .outside-trend { margin: 12px 0 0; color: var(--ink); font-size: .78rem; font-weight: 750; line-height: 1.45; }
         .night-summary, .events { padding: 28px; margin-bottom: 22px; }
         .section-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; }
         .summary-source { padding: 6px 10px; border-radius: 999px; background: #f3eefb; color: #78689d; font-size: .74rem; font-weight: 800; }
@@ -217,6 +218,7 @@
                 <div class="metric-label">Outside temperature</div>
                 <div id="outsideValue" class="metric-value">--°C</div>
                 <div id="outsideStatus" class="metric-status">Loading Sligo weather</div>
+                <p id="outsideTrend" class="outside-trend"></p>
                 <a class="metric-source" href="https://open-meteo.com/" target="_blank" rel="noreferrer">Weather data: Open-Meteo</a>
             </article>
         </section>
@@ -596,8 +598,26 @@
                     `${weather.label} · ${weather.stale ? "last available" : formatClock(weather.observed_at)}`,
                     weather.stale ? "caution" : "good"
                 );
+                const comparison = weather.night_comparison;
+                const trend = document.getElementById("outsideTrend");
+                if (!comparison) {
+                    trend.textContent = "";
+                } else {
+                    const nightsLabel = comparison.nights === 1 ? "previous night" : `previous ${comparison.nights} nights`;
+                    const difference = Math.abs(comparison.delta_c).toFixed(1);
+                    if (comparison.position === "coldest") {
+                        trend.textContent = `Last night outside was the coldest of the last ${comparison.nights + 1} nights, averaging ${comparison.last_night_avg_c.toFixed(1)}°C.`;
+                    } else if (comparison.position === "warmest") {
+                        trend.textContent = `Last night outside was the warmest of the last ${comparison.nights + 1} nights, averaging ${comparison.last_night_avg_c.toFixed(1)}°C.`;
+                    } else if (comparison.delta_c === 0) {
+                        trend.textContent = `Last night outside matched the ${nightsLabel} average at ${comparison.last_night_avg_c.toFixed(1)}°C.`;
+                    } else {
+                        trend.textContent = `Last night outside was ${difference}°C ${comparison.delta_c < 0 ? "cooler" : "warmer"} than the ${nightsLabel} average.`;
+                    }
+                }
             } catch (_error) {
                 document.getElementById("outsideValue").textContent = "--°C";
+                document.getElementById("outsideTrend").textContent = "";
                 setStatus("outsideStatus", "Outside weather unavailable", "caution");
             }
         }

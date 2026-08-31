@@ -921,8 +921,10 @@ class WeatherService:
                     "latitude": self.latitude,
                     "longitude": self.longitude,
                     "current": "temperature_2m",
+                    "hourly": "temperature_2m",
                     "temperature_unit": "celsius",
                     "timezone": "UTC",
+                    "past_days": 7,
                     "forecast_days": 1
                 })
                 request_data = urllib.request.Request(
@@ -941,7 +943,8 @@ class WeatherService:
                     "observed_at": observed_at,
                     "label": self.label,
                     "source": "Open-Meteo",
-                    "stale": False
+                    "stale": False,
+                    "night_comparison": self._night_comparison(payload)
                 }
                 self._cached_at = now
                 return dict(self._cached)
@@ -956,6 +959,62 @@ class WeatherService:
                     "source": "Open-Meteo",
                     "stale": False
                 }
+
+    @staticmethod
+    def _night_comparison(payload):
+        try:
+            hourly_times = payload["hourly"]["time"]
+            hourly_temperatures = payload["hourly"]["temperature_2m"]
+        except (KeyError, TypeError):
+            return None
+
+        samples = []
+        for timestamp, temperature in zip(hourly_times, hourly_temperatures):
+            if temperature is None:
+                continue
+            samples.append((
+                datetime.fromisoformat(timestamp).replace(tzinfo=timezone.utc),
+                float(temperature)
+            ))
+
+        dublin = ZoneInfo("Europe/Dublin")
+        now_local = datetime.now(timezone.utc).astimezone(dublin)
+        end_local = now_local.replace(hour=9, minute=0, second=0, microsecond=0)
+        if now_local.hour < 9:
+            end_local -= timedelta(days=1)
+        start_local = (end_local - timedelta(days=1)).replace(
+            hour=20, minute=0, second=0, microsecond=0
+        )
+
+        nightly_averages = []
+        for day_offset in range(6):
+            start = (start_local - timedelta(days=day_offset)).astimezone(timezone.utc)
+            end = (end_local - timedelta(days=day_offset)).astimezone(timezone.utc)
+            values = [
+                temperature
+                for timestamp, temperature in samples
+                if start <= timestamp <= end
+            ]
+            if values:
+                nightly_averages.append(round(statistics.mean(values), 1))
+
+        if len(nightly_averages) < 2:
+            return None
+        last_night = nightly_averages[0]
+        previous_nights = nightly_averages[1:]
+        if last_night < min(previous_nights):
+            position = "coldest"
+        elif last_night > max(previous_nights):
+            position = "warmest"
+        else:
+            position = "within_range"
+        return {
+            "nights": len(previous_nights),
+            "last_night_avg_c": last_night,
+            "previous_avg_c": round(statistics.mean(previous_nights), 1),
+            "delta_c": round(last_night - statistics.mean(previous_nights), 1),
+            "position": position
+        }
 
 
 # ============ Flask App ============

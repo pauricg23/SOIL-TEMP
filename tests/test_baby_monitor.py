@@ -153,6 +153,27 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertEqual(second, first)
         urlopen.assert_called_once()
 
+    def test_weather_service_compares_previous_five_nights(self):
+        dublin = monitor_app.ZoneInfo("Europe/Dublin")
+        now_local = datetime.now(timezone.utc).astimezone(dublin)
+        end_local = now_local.replace(hour=9, minute=0, second=0, microsecond=0)
+        if now_local.hour < 9:
+            end_local -= timedelta(days=1)
+        start_local = (end_local - timedelta(days=1)).replace(hour=20)
+        temperatures = [8.0, 10.0, 11.0, 12.0, 13.0, 14.0]
+        timestamps = [
+            (start_local - timedelta(days=day_offset) + timedelta(hours=2))
+            .astimezone(timezone.utc).replace(tzinfo=None).isoformat(timespec="minutes")
+            for day_offset in range(6)
+        ]
+        comparison = monitor_app.WeatherService._night_comparison({
+            "hourly": {"time": timestamps, "temperature_2m": temperatures}
+        })
+        self.assertEqual(comparison["nights"], 5)
+        self.assertEqual(comparison["position"], "coldest")
+        self.assertEqual(comparison["last_night_avg_c"], 8.0)
+        self.assertLess(comparison["delta_c"], 0)
+
     def test_weather_endpoint_is_authenticated(self):
         self.assertEqual(self.client.get("/api/weather/current").status_code, 401)
         weather = {
@@ -302,6 +323,7 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertIn(b'id="humidityChart"', baby.data)
         self.assertIn(b'id="co2Chart"', baby.data)
         self.assertIn(b'id="outsideValue"', baby.data)
+        self.assertIn(b'id="outsideTrend"', baby.data)
         self.assertIn(b'data-chart-card="temperature"', baby.data)
         self.assertIn(b'class="expand-chart"', baby.data)
         self.assertIn(b'id="nightSummary"', baby.data)
