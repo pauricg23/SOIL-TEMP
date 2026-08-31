@@ -188,6 +188,58 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["temperature_c"], 14.6)
 
+    def test_event_toggles_accept_backdated_times_and_report_state(self):
+        self.assertEqual(self.client.get("/api/baby/event-states").status_code, 401)
+        now_utc = datetime.now(timezone.utc).replace(microsecond=0)
+        heating_on_time = now_utc - timedelta(hours=2)
+        heating_off_time = now_utc - timedelta(hours=1)
+        heating_on = self.client.post(
+            "/api/baby/events",
+            json={"event_type": "heating_on", "occurred_at": heating_on_time.isoformat()},
+            headers=self.auth_headers()
+        )
+        heating_off = self.client.post(
+            "/api/baby/events",
+            json={"event_type": "heating_off", "occurred_at": heating_off_time.isoformat()},
+            headers=self.auth_headers()
+        )
+        window_opened = self.client.post(
+            "/api/baby/events",
+            json={"event_type": "window_opened", "occurred_at": heating_on_time.isoformat()},
+            headers=self.auth_headers()
+        )
+        window_closed = self.client.post(
+            "/api/baby/events",
+            json={"event_type": "window_closed", "occurred_at": heating_off_time.isoformat()},
+            headers=self.auth_headers()
+        )
+        future = self.client.post(
+            "/api/baby/events",
+            json={
+                "event_type": "bedtime",
+                "occurred_at": (now_utc + timedelta(hours=1)).isoformat()
+            },
+            headers=self.auth_headers()
+        )
+
+        self.assertEqual(heating_on.status_code, 201)
+        self.assertEqual(
+            heating_on.get_json()["timestamp"],
+            heating_on_time.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+        )
+        self.assertEqual(heating_off.status_code, 201)
+        self.assertEqual(window_opened.status_code, 201)
+        self.assertEqual(window_closed.get_json()["label"], "Window closed")
+        self.assertEqual(future.status_code, 400)
+
+        states = self.client.get(
+            "/api/baby/event-states", headers=self.auth_headers()
+        ).get_json()
+        self.assertFalse(states["heating"]["active"])
+        self.assertEqual(states["heating"]["latest_event"]["event_type"], "heating_off")
+        self.assertFalse(states["window"]["active"])
+        self.assertEqual(states["window"]["latest_event"]["event_type"], "window_closed")
+
     def test_baby_events_and_night_summary(self):
         self.assertEqual(self.client.get("/api/baby/events").status_code, 401)
         invalid = self.client.post(
@@ -340,7 +392,12 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertIn(b'data-chart-card="temperature"', baby.data)
         self.assertIn(b'class="expand-chart"', baby.data)
         self.assertIn(b'id="nightSummary"', baby.data)
-        self.assertIn(b'data-event="bedtime"', baby.data)
+        self.assertIn(b'data-toggle="sleep"', baby.data)
+        self.assertIn(b'data-toggle="window"', baby.data)
+        self.assertIn(b'data-toggle="dehumidifier"', baby.data)
+        self.assertIn(b'data-toggle="heating"', baby.data)
+        self.assertIn(b'id="eventTime"', baby.data)
+        self.assertNotIn(b'data-event="heating_off"', baby.data)
         self.assertIn(b'id="exportLink"', baby.data)
         self.assertIn(b'id="healthUptime"', baby.data)
         self.assertNotIn(b'id="signalValue"', baby.data)

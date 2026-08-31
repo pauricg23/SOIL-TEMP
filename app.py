@@ -445,10 +445,17 @@ class BabyDataManager:
         "bedtime": "Bedtime",
         "got_up": "Got up",
         "window_opened": "Window opened",
+        "window_closed": "Window closed",
         "dehumidifier_on": "Dehumidifier on",
         "dehumidifier_off": "Dehumidifier off",
         "heating_on": "Heating on",
         "heating_off": "Heating off"
+    }
+    EVENT_TOGGLES = {
+        "sleep": ("bedtime", "got_up"),
+        "window": ("window_opened", "window_closed"),
+        "dehumidifier": ("dehumidifier_on", "dehumidifier_off"),
+        "heating": ("heating_on", "heating_off")
     }
 
     def __init__(self):
@@ -701,14 +708,21 @@ class BabyDataManager:
             }
         }
 
-    def add_event(self, event_type, note=None):
+    def add_event(self, event_type, note=None, occurred_at=None):
         if event_type not in self.EVENT_LABELS:
             raise ValueError("Unknown baby-room event")
+        event_timestamp = self._normalise_event_timestamp(occurred_at)
         conn = get_db_connection()
-        cursor = conn.execute('''
-            INSERT INTO baby_events (event_type, note)
-            VALUES (?, ?)
-        ''', (event_type, str(note or "")[:160]))
+        if event_timestamp:
+            cursor = conn.execute('''
+                INSERT INTO baby_events (timestamp, event_type, note)
+                VALUES (?, ?, ?)
+            ''', (event_timestamp, event_type, str(note or "")[:160]))
+        else:
+            cursor = conn.execute('''
+                INSERT INTO baby_events (event_type, note)
+                VALUES (?, ?)
+            ''', (event_type, str(note or "")[:160]))
         event_id = cursor.lastrowid
         conn.commit()
         row = conn.execute('''
@@ -717,6 +731,43 @@ class BabyDataManager:
         ''', (event_id,)).fetchone()
         conn.close()
         return self._event_dict(row)
+
+    @staticmethod
+    def _normalise_event_timestamp(value):
+        if value is None or str(value).strip() == "":
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError("Event time is invalid") from error
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=ZoneInfo("Europe/Dublin"))
+        event_utc = parsed.astimezone(timezone.utc)
+        now_utc = datetime.now(timezone.utc)
+        if event_utc > now_utc + timedelta(minutes=5):
+            raise ValueError("Event time cannot be in the future")
+        if event_utc < now_utc - timedelta(days=30):
+            raise ValueError("Event time cannot be more than 30 days ago")
+        return event_utc.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+
+    def get_event_states(self):
+        conn = get_db_connection()
+        states = {}
+        for toggle_name, (active_event, inactive_event) in self.EVENT_TOGGLES.items():
+            row = conn.execute('''
+                SELECT id, timestamp, event_type, note
+                FROM baby_events
+                WHERE event_type IN (?, ?)
+                ORDER BY timestamp DESC, id DESC
+                LIMIT 1
+            ''', (active_event, inactive_event)).fetchone()
+            states[toggle_name] = {
+                "active": bool(row and row[2] == active_event),
+                "known": row is not None,
+                "latest_event": self._event_dict(row) if row else None
+            }
+        conn.close()
+        return states
 
     def get_events(self, hours=24, limit=100):
         hours = max(1, min(int(hours), 24 * 365))
@@ -728,7 +779,7 @@ class BabyDataManager:
             SELECT id, timestamp, event_type, note
             FROM baby_events
             WHERE timestamp >= ?
-            ORDER BY timestamp DESC
+            ORDER BY timestamp DESC, id DESC
             LIMIT ?
         ''', (cutoff, limit)).fetchall()
         conn.close()
@@ -1284,11 +1335,19 @@ def baby_events():
         return jsonify({"error": "JSON object required"}), 400
     try:
         event = baby_data_manager.add_event(
-            str(data.get("event_type") or "").strip(), data.get("note")
+            str(data.get("event_type") or "").strip(),
+            data.get("note"),
+            data.get("occurred_at")
         )
         return jsonify(event), 201
     except ValueError as error:
         return jsonify({"error": str(error)}), 400
+
+
+@app.route("/api/baby/event-states")
+@require_auth
+def baby_event_states():
+    return jsonify(baby_data_manager.get_event_states())
 
 
 @app.route("/api/baby/night-summary")

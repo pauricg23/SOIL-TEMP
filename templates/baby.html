@@ -110,7 +110,22 @@
         .summary-item strong { display: block; margin-top: 4px; font-size: 1.25rem; }
         .summary-item span { color: var(--muted); font-size: .78rem; }
         .comparison { margin: 14px 0 0; color: var(--muted); font-size: .86rem; }
-        .event-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+        .event-time { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin-top: 18px; padding: 16px; border-radius: 18px; background: #faf8fc; }
+        .event-time label strong, .event-time label span { display: block; }
+        .event-time label span { margin-top: 3px; color: var(--muted); font-size: .76rem; }
+        .event-time-entry { display: flex; align-items: center; gap: 8px; }
+        .event-time input { min-width: 220px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: white; color: var(--ink); font: inherit; }
+        .toggle-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 14px; }
+        .toggle-control { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 18px; background: #faf8fc; text-align: left; }
+        .toggle-control:hover { background: #f6f1fb; }
+        .toggle-control[aria-checked="true"] { border-color: #c9dfd2; background: #edf7f1; }
+        .toggle-copy { flex: 1; }
+        .toggle-copy strong, .toggle-copy small { display: block; }
+        .toggle-copy small { margin-top: 3px; color: var(--muted); font-size: .74rem; }
+        .toggle-track { position: relative; flex: 0 0 auto; width: 46px; height: 26px; border-radius: 999px; background: #cbc5d6; transition: background .2s ease; }
+        .toggle-thumb { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: white; box-shadow: 0 2px 6px rgba(64, 55, 82, .2); transition: transform .2s ease; }
+        .toggle-control[aria-checked="true"] .toggle-track { background: #71b58d; }
+        .toggle-control[aria-checked="true"] .toggle-thumb { transform: translateX(20px); }
         button, .button-link { border: 0; border-radius: 999px; padding: 10px 14px; background: #f3eefb; color: var(--ink); font: inherit; font-size: .84rem; font-weight: 800; cursor: pointer; text-decoration: none; }
         button:hover, .button-link:hover { background: #e8def7; }
         button:disabled { cursor: wait; opacity: .6; }
@@ -175,6 +190,10 @@
             .stats { grid-template-columns: repeat(2, 1fr); }
             .chart-card { padding: 18px; }
             .chart-card.expanded .chart-wrap { height: calc(100vh - 315px); min-height: 360px; }
+            .event-time { align-items: stretch; flex-direction: column; }
+            .event-time-entry { align-items: stretch; flex-direction: column; }
+            .event-time input { min-width: 0; width: 100%; }
+            .toggle-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -245,16 +264,35 @@
 
         <section class="card events">
             <div class="section-heading">
-                <div><h2>Add a room note</h2><p class="subtle">These markers help explain changes on the graphs.</p></div>
+                <div><h2>Room activity</h2><p class="subtle">Switch each item when its state changes. Every change becomes a graph marker.</p></div>
             </div>
-            <div class="event-buttons">
-                <button type="button" data-event="bedtime">🌙 Bedtime</button>
-                <button type="button" data-event="got_up">☀️ Got up</button>
-                <button type="button" data-event="window_opened">🪟 Window opened</button>
-                <button type="button" data-event="dehumidifier_on">💧 Dehumidifier on</button>
-                <button type="button" data-event="dehumidifier_off">✓ Dehumidifier off</button>
-                <button type="button" data-event="heating_on">🔥 Heating on</button>
-                <button type="button" data-event="heating_off">✓ Heating off</button>
+            <div class="event-time">
+                <label for="eventTime">
+                    <strong>When did this happen?</strong>
+                    <span>Leave blank to use now, or choose an earlier time if you forgot.</span>
+                </label>
+                <div class="event-time-entry">
+                    <input id="eventTime" type="datetime-local" step="60">
+                    <button id="eventTimeNow" type="button">Use now</button>
+                </div>
+            </div>
+            <div class="toggle-grid">
+                <button type="button" class="toggle-control" data-toggle="sleep" role="switch" aria-checked="false">
+                    <span class="toggle-copy"><strong>🌙 Baby</strong><small data-toggle-state>Awake</small></span>
+                    <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+                </button>
+                <button type="button" class="toggle-control" data-toggle="window" role="switch" aria-checked="false">
+                    <span class="toggle-copy"><strong>🪟 Window</strong><small data-toggle-state>Closed</small></span>
+                    <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+                </button>
+                <button type="button" class="toggle-control" data-toggle="dehumidifier" role="switch" aria-checked="false">
+                    <span class="toggle-copy"><strong>💧 Dehumidifier</strong><small data-toggle-state>Off</small></span>
+                    <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+                </button>
+                <button type="button" class="toggle-control" data-toggle="heating" role="switch" aria-checked="false">
+                    <span class="toggle-copy"><strong>🔥 Heating</strong><small data-toggle-state>Off</small></span>
+                    <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+                </button>
             </div>
             <div id="eventFeedback" class="event-feedback" aria-live="polite"></div>
             <div id="eventFeed" class="event-feed"></div>
@@ -348,6 +386,12 @@
                 sleepbag: ["0.5 TOG sleep bag", "Short-sleeved bodysuit or just a nappy"],
                 blankets: ["Sheet only or no sheet", "Nappy and vest"]
             }
+        };
+        const eventToggleConfig = {
+            sleep: {onEvent: "bedtime", offEvent: "got_up", onLabel: "Asleep", offLabel: "Awake"},
+            window: {onEvent: "window_opened", offEvent: "window_closed", onLabel: "Open", offLabel: "Closed"},
+            dehumidifier: {onEvent: "dehumidifier_on", offEvent: "dehumidifier_off", onLabel: "On", offLabel: "Off"},
+            heating: {onEvent: "heating_on", offEvent: "heating_off", onLabel: "On", offLabel: "Off"}
         };
 
         let latestTemperature = null;
@@ -784,21 +828,54 @@
                 : '<span class="subtle">No room notes in this period yet.</span>';
         }
 
-        async function recordEvent(eventType, button) {
+        function updateToggleStates(states) {
+            Object.entries(eventToggleConfig).forEach(([toggleName, config]) => {
+                const button = document.querySelector(`[data-toggle="${toggleName}"]`);
+                const state = states[toggleName];
+                const active = Boolean(state && state.active);
+                button.setAttribute("aria-checked", active ? "true" : "false");
+                const stateLabel = active ? config.onLabel : config.offLabel;
+                button.querySelector("[data-toggle-state]").textContent = state && state.latest_event
+                    ? `${stateLabel} · since ${formatTime(state.latest_event.timestamp)}`
+                    : stateLabel;
+            });
+        }
+
+        function updateEventTimeLimit() {
+            const now = new Date();
+            const localNow = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+            document.getElementById("eventTime").max = localNow.toISOString().slice(0, 16);
+        }
+
+        async function recordToggle(toggleName, button) {
             button.disabled = true;
             const feedback = document.getElementById("eventFeedback");
             try {
+                const config = eventToggleConfig[toggleName];
+                const currentlyActive = button.getAttribute("aria-checked") === "true";
+                const eventType = currentlyActive ? config.offEvent : config.onEvent;
+                const chosenTime = document.getElementById("eventTime").value;
+                let occurredAt = null;
+                if (chosenTime) {
+                    const parsedTime = new Date(chosenTime);
+                    if (Number.isNaN(parsedTime.getTime())) throw new Error("Please choose a valid date and time.");
+                    if (parsedTime.getTime() > Date.now() + 5 * 60 * 1000) {
+                        throw new Error("The event time cannot be in the future.");
+                    }
+                    occurredAt = parsedTime.toISOString();
+                }
                 const response = await fetch("/api/baby/events", {
                     method: "POST",
                     headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({event_type: eventType})
+                    body: JSON.stringify({event_type: eventType, occurred_at: occurredAt})
                 });
-                if (!response.ok) throw new Error("Could not save room note");
                 const event = await response.json();
+                if (!response.ok) throw new Error(event.error || "Could not save room activity");
                 feedback.textContent = `${event.label} saved at ${formatClock(event.timestamp)}.`;
+                document.getElementById("eventTime").value = "";
                 await refreshDashboard();
-            } catch (_error) {
-                feedback.textContent = "That room note could not be saved. Please try again.";
+            } catch (error) {
+                feedback.textContent = error.message || "That room activity could not be saved. Please try again.";
             } finally {
                 button.disabled = false;
             }
@@ -810,23 +887,26 @@
             const hours = document.getElementById("hours").value;
             document.getElementById("exportLink").href = `/api/baby/export.csv?hours=${hours}`;
             try {
-                const [statsResponse, chartResponse, eventsResponse, nightResponse] = await Promise.all([
+                const [statsResponse, chartResponse, eventsResponse, statesResponse, nightResponse] = await Promise.all([
                     fetch(`/api/baby/stats?hours=${hours}`),
                     fetch(`/api/baby/chart?hours=${hours}&max_points=1500`),
                     fetch(`/api/baby/events?hours=${hours}`),
+                    fetch("/api/baby/event-states"),
                     fetch("/api/baby/night-summary")
                 ]);
-                if (!statsResponse.ok || !chartResponse.ok || !eventsResponse.ok || !nightResponse.ok) {
+                if (!statsResponse.ok || !chartResponse.ok || !eventsResponse.ok || !statesResponse.ok || !nightResponse.ok) {
                     throw new Error("Dashboard request failed");
                 }
                 const stats = await statsResponse.json();
                 const chartRows = await chartResponse.json();
                 const events = await eventsResponse.json();
+                const eventStates = await statesResponse.json();
                 const nightSummary = await nightResponse.json();
                 if (stats.latest) updateCurrent(stats.latest, chartRows);
                 updateStats(stats);
                 updateCharts(chartRows, events);
                 updateEvents(events);
+                updateToggleStates(eventStates);
                 updateNightSummary(nightSummary);
             } catch (error) {
                 const badge = document.getElementById("onlineBadge");
@@ -839,8 +919,13 @@
 
         document.getElementById("beddingMode").addEventListener("change", updateGuide);
         document.getElementById("hours").addEventListener("change", refreshDashboard);
-        document.querySelectorAll("[data-event]").forEach(button => {
-            button.addEventListener("click", () => recordEvent(button.dataset.event, button));
+        document.getElementById("eventTimeNow").addEventListener("click", () => {
+            document.getElementById("eventTime").value = "";
+            document.getElementById("eventFeedback").textContent = "The next change will use the current time.";
+        });
+        document.getElementById("eventTime").addEventListener("focus", updateEventTimeLimit);
+        document.querySelectorAll("[data-toggle]").forEach(button => {
+            button.addEventListener("click", () => recordToggle(button.dataset.toggle, button));
         });
         document.querySelectorAll("[data-chart-card]").forEach(card => {
             card.querySelector(".expand-chart").addEventListener("click", () => expandChart(card));
@@ -854,6 +939,7 @@
         });
         window.addEventListener("pagehide", closeExpandedChart);
         window.addEventListener("pageshow", closeExpandedChart);
+        updateEventTimeLimit();
         refreshDashboard();
         refreshOutsideWeather();
         setInterval(refreshDashboard, 30000);
