@@ -1,0 +1,14 @@
+[Unit]
+Description=Back up soil monitor SQLite database
+After=soil-monitor.service
+
+[Service]
+Type=oneshot
+User=pauricg
+Group=pauricg
+WorkingDirectory=/home/pauricg/soil-monitor-app
+ExecStart=/home/pauricg/soil-monitor-app/.venv/bin/python /home/pauricg/soil-monitor-app/scripts/backup_database.py --database /home/pauricg/soil-monitor-app/temperature_data.db --output-dir /home/pauricg/soil-monitor-app/backups --keep 30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/pauricg/soil-monitor-app/backups

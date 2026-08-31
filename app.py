@@ -1,5 +1,8 @@
-from flask import Flask, render_template, render_template_string, jsonify, request, send_from_directory
+from flask import Flask, Response, render_template, render_template_string, jsonify, request, send_from_directory
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+import csv
+import io
 import json
 import math
 import os
@@ -433,6 +436,14 @@ class TemperatureDataManager:
 
 
 class BabyDataManager:
+    EVENT_LABELS = {
+        "bedtime": "Bedtime",
+        "got_up": "Got up",
+        "window_opened": "Window opened",
+        "dehumidifier_on": "Dehumidifier on",
+        "dehumidifier_off": "Dehumidifier off"
+    }
+
     def __init__(self):
         self.init_database()
 
@@ -448,28 +459,62 @@ class BabyDataManager:
                 temperature_c REAL NOT NULL,
                 humidity_rh REAL NOT NULL,
                 rssi INTEGER,
-                firmware_version TEXT
+                firmware_version TEXT,
+                uptime_seconds INTEGER,
+                reset_reason TEXT,
+                warmup INTEGER NOT NULL DEFAULT 0
+            )
+        ''')
+        for definition in (
+            "uptime_seconds INTEGER",
+            "reset_reason TEXT",
+            "warmup INTEGER NOT NULL DEFAULT 0"
+        ):
+            try:
+                conn.execute(f"ALTER TABLE baby_readings ADD COLUMN {definition}")
+            except sqlite3.OperationalError:
+                pass
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS baby_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                event_type TEXT NOT NULL,
+                note TEXT
             )
         ''')
         conn.execute('''
             CREATE INDEX IF NOT EXISTS idx_baby_timestamp
             ON baby_readings(timestamp)
         ''')
+        conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_baby_events_timestamp
+            ON baby_events(timestamp)
+        ''')
+        conn.execute('''
+            UPDATE baby_readings
+            SET warmup = 1
+            WHERE COALESCE(warmup, 0) = 0
+              AND (msg_id GLOB '*-1' OR msg_id GLOB '*-2'
+                   OR msg_id GLOB '*-3' OR msg_id GLOB '*-4'
+                   OR msg_id GLOB '*-5' OR msg_id GLOB '*-6')
+        ''')
         conn.commit()
         conn.close()
 
     def add_reading(self, msg_id, device_id, co2_ppm, temperature_c,
-                    humidity_rh, rssi=None, firmware_version=None):
+                    humidity_rh, rssi=None, firmware_version=None,
+                    uptime_seconds=None, reset_reason=None, warmup=False):
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('''
             INSERT OR IGNORE INTO baby_readings
                 (msg_id, device_id, co2_ppm, temperature_c, humidity_rh,
-                 rssi, firmware_version)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                 rssi, firmware_version, uptime_seconds, reset_reason, warmup)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             str(msg_id)[:96], str(device_id)[:64], co2_ppm, temperature_c,
-            humidity_rh, rssi, str(firmware_version or "")[:48]
+            humidity_rh, rssi, str(firmware_version or "")[:48],
+            uptime_seconds, str(reset_reason or "")[:48], int(bool(warmup))
         ))
         inserted = cursor.rowcount > 0
         conn.commit()
@@ -484,7 +529,8 @@ class BabyDataManager:
         conn = get_db_connection()
         rows = conn.execute('''
             SELECT timestamp, co2_ppm, temperature_c, humidity_rh,
-                   device_id, rssi, firmware_version
+                   device_id, rssi, firmware_version, uptime_seconds,
+                   reset_reason, warmup
             FROM baby_readings
             WHERE timestamp >= ?
             ORDER BY timestamp DESC
@@ -499,7 +545,10 @@ class BabyDataManager:
                 "humidity_rh": row[3],
                 "device_id": row[4],
                 "rssi": row[5],
-                "firmware_version": row[6]
+                "firmware_version": row[6],
+                "uptime_seconds": row[7],
+                "reset_reason": row[8],
+                "warmup": bool(row[9])
             }
             for row in rows
         ]
@@ -518,20 +567,41 @@ class BabyDataManager:
                    CAST(ROUND(AVG(co2_ppm)) AS INTEGER),
                    AVG(temperature_c), AVG(humidity_rh)
             FROM baby_readings
-            WHERE timestamp >= ?
+            WHERE timestamp >= ? AND COALESCE(warmup, 0) = 0
             GROUP BY CAST(strftime('%s', timestamp) AS INTEGER) / ?
             ORDER BY MAX(timestamp) DESC
         ''', (cutoff, bucket_seconds)).fetchall()
         conn.close()
-        return [
+        readings = [
             {
                 "timestamp": row[0],
                 "co2_ppm": row[1],
                 "temperature_c": round(row[2], 2),
-                "humidity_rh": round(row[3], 2)
+                "humidity_rh": round(row[3], 2),
+                "filtered": False
             }
             for row in rows
         ]
+        return self._smooth_isolated_outliers(readings)
+
+    @staticmethod
+    def _smooth_isolated_outliers(readings):
+        ordered = list(reversed(readings))
+        thresholds = {"temperature_c": 1.0, "humidity_rh": 4.0}
+        for index in range(1, len(ordered) - 1):
+            previous = ordered[index - 1]
+            current = ordered[index]
+            following = ordered[index + 1]
+            for metric, threshold in thresholds.items():
+                neighbours_close = abs(previous[metric] - following[metric]) <= threshold / 2
+                isolated = (
+                    abs(current[metric] - previous[metric]) > threshold and
+                    abs(current[metric] - following[metric]) > threshold
+                )
+                if neighbours_close and isolated:
+                    current[metric] = round((previous[metric] + following[metric]) / 2, 2)
+                    current["filtered"] = True
+        return list(reversed(ordered))
 
     def get_statistics(self, hours=24):
         hours = max(1, min(int(hours), 24 * 365))
@@ -544,32 +614,45 @@ class BabyDataManager:
                    MIN(temperature_c), MAX(temperature_c), AVG(temperature_c),
                    MIN(humidity_rh), MAX(humidity_rh), AVG(humidity_rh)
             FROM baby_readings
-            WHERE timestamp >= ?
+            WHERE timestamp >= ? AND COALESCE(warmup, 0) = 0
         ''', (cutoff,)).fetchone()
-        latest = conn.execute('''
+        latest_valid = conn.execute('''
             SELECT timestamp, co2_ppm, temperature_c, humidity_rh,
-                   device_id, rssi, firmware_version
+                   device_id, rssi, firmware_version, uptime_seconds,
+                   reset_reason, warmup
+            FROM baby_readings
+            WHERE COALESCE(warmup, 0) = 0
+            ORDER BY timestamp DESC
+            LIMIT 1
+        ''').fetchone()
+        latest_device = conn.execute('''
+            SELECT timestamp, device_id, rssi, firmware_version,
+                   uptime_seconds, reset_reason, warmup
             FROM baby_readings
             ORDER BY timestamp DESC
             LIMIT 1
         ''').fetchone()
         conn.close()
 
-        if not latest:
+        if not latest_device or not latest_valid or not row[0]:
             return {"count": 0, "latest": None, "co2": None, "temperature": None, "humidity": None}
 
-        latest_time = datetime.fromisoformat(latest[0])
+        latest_time = datetime.fromisoformat(latest_device[0])
         age_seconds = max(0, int((now_utc - latest_time).total_seconds()))
         return {
             "count": row[0],
             "latest": {
-                "timestamp": latest[0],
-                "co2_ppm": latest[1],
-                "temperature_c": latest[2],
-                "humidity_rh": latest[3],
-                "device_id": latest[4],
-                "rssi": latest[5],
-                "firmware_version": latest[6],
+                "timestamp": latest_device[0],
+                "measurement_timestamp": latest_valid[0],
+                "co2_ppm": latest_valid[1],
+                "temperature_c": latest_valid[2],
+                "humidity_rh": latest_valid[3],
+                "device_id": latest_device[1],
+                "rssi": latest_device[2],
+                "firmware_version": latest_device[3],
+                "uptime_seconds": latest_device[4],
+                "reset_reason": latest_device[5],
+                "warming_up": bool(latest_device[6]),
                 "age_seconds": age_seconds,
                 "online": age_seconds <= 120
             },
@@ -577,6 +660,171 @@ class BabyDataManager:
             "temperature": {"min": row[4], "max": row[5], "avg": round(row[6], 1)},
             "humidity": {"min": row[7], "max": row[8], "avg": round(row[9], 1)}
         }
+
+    def add_event(self, event_type, note=None):
+        if event_type not in self.EVENT_LABELS:
+            raise ValueError("Unknown baby-room event")
+        conn = get_db_connection()
+        cursor = conn.execute('''
+            INSERT INTO baby_events (event_type, note)
+            VALUES (?, ?)
+        ''', (event_type, str(note or "")[:160]))
+        event_id = cursor.lastrowid
+        conn.commit()
+        row = conn.execute('''
+            SELECT id, timestamp, event_type, note
+            FROM baby_events WHERE id = ?
+        ''', (event_id,)).fetchone()
+        conn.close()
+        return self._event_dict(row)
+
+    def get_events(self, hours=24, limit=100):
+        hours = max(1, min(int(hours), 24 * 365))
+        limit = max(1, min(int(limit), 500))
+        cutoff = (datetime.now(timezone.utc).replace(tzinfo=None) -
+                  timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+        conn = get_db_connection()
+        rows = conn.execute('''
+            SELECT id, timestamp, event_type, note
+            FROM baby_events
+            WHERE timestamp >= ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        ''', (cutoff, limit)).fetchall()
+        conn.close()
+        return [self._event_dict(row) for row in rows]
+
+    def _event_dict(self, row):
+        return {
+            "id": row[0],
+            "timestamp": row[1],
+            "event_type": row[2],
+            "label": self.EVENT_LABELS.get(row[2], row[2]),
+            "note": row[3] or ""
+        }
+
+    def get_night_summary(self):
+        now_utc = datetime.now(timezone.utc)
+        now_naive = now_utc.replace(tzinfo=None)
+        conn = get_db_connection()
+        bedtime_row = conn.execute('''
+            SELECT timestamp FROM baby_events
+            WHERE event_type = 'bedtime' AND timestamp >= ?
+            ORDER BY timestamp DESC LIMIT 1
+        ''', ((now_naive - timedelta(hours=36)).strftime("%Y-%m-%d %H:%M:%S"),)).fetchone()
+
+        source = "estimated"
+        completed = True
+        if bedtime_row:
+            start = datetime.fromisoformat(bedtime_row[0]).replace(tzinfo=timezone.utc)
+            got_up_row = conn.execute('''
+                SELECT timestamp FROM baby_events
+                WHERE event_type = 'got_up' AND timestamp > ?
+                ORDER BY timestamp ASC LIMIT 1
+            ''', (bedtime_row[0],)).fetchone()
+            if got_up_row:
+                end = datetime.fromisoformat(got_up_row[0]).replace(tzinfo=timezone.utc)
+            else:
+                end = now_utc
+                completed = False
+            if end - start <= timedelta(hours=18):
+                source = "recorded"
+            else:
+                start, end, completed = self._estimated_night_window(now_utc)
+        else:
+            start, end, completed = self._estimated_night_window(now_utc)
+
+        summary = self._summarize_window(conn, start, end)
+        previous = self._summarize_window(
+            conn, start - timedelta(days=1), end - timedelta(days=1)
+        )
+        conn.close()
+        if not summary:
+            return None
+        summary.update({
+            "start": start.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+            "end": end.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+            "source": source,
+            "completed": completed,
+            "comparison": None
+        })
+        if previous:
+            summary["comparison"] = {
+                "temperature_avg_delta": round(
+                    summary["temperature"]["avg"] - previous["temperature"]["avg"], 1
+                ),
+                "humidity_avg_delta": round(
+                    summary["humidity"]["avg"] - previous["humidity"]["avg"], 1
+                ),
+                "co2_avg_delta": round(summary["co2"]["avg"] - previous["co2"]["avg"])
+            }
+        return summary
+
+    @staticmethod
+    def _estimated_night_window(now_utc):
+        dublin = ZoneInfo("Europe/Dublin")
+        now_local = now_utc.astimezone(dublin)
+        today_at_nine = now_local.replace(hour=9, minute=0, second=0, microsecond=0)
+        if now_local.hour < 9:
+            end_local = now_local
+        else:
+            end_local = today_at_nine
+        start_local = (end_local - timedelta(days=1)).replace(
+            hour=20, minute=0, second=0, microsecond=0
+        )
+        return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc), now_local.hour >= 9
+
+    @staticmethod
+    def _summarize_window(conn, start, end):
+        row = conn.execute('''
+            SELECT COUNT(*),
+                   MIN(temperature_c), MAX(temperature_c), AVG(temperature_c),
+                   100.0 * AVG(CASE WHEN temperature_c BETWEEN 16 AND 20 THEN 1 ELSE 0 END),
+                   MIN(humidity_rh), MAX(humidity_rh), AVG(humidity_rh),
+                   100.0 * AVG(CASE WHEN humidity_rh BETWEEN 40 AND 60 THEN 1 ELSE 0 END),
+                   MIN(co2_ppm), MAX(co2_ppm), AVG(co2_ppm),
+                   100.0 * AVG(CASE WHEN co2_ppm < 1000 THEN 1 ELSE 0 END),
+                   100.0 * AVG(CASE WHEN co2_ppm >= 1400 THEN 1 ELSE 0 END)
+            FROM baby_readings
+            WHERE timestamp >= ? AND timestamp <= ?
+              AND COALESCE(warmup, 0) = 0
+        ''', (
+            start.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+            end.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+        )).fetchone()
+        if not row or not row[0]:
+            return None
+        return {
+            "count": row[0],
+            "duration_hours": round((end - start).total_seconds() / 3600, 1),
+            "temperature": {
+                "min": round(row[1], 1), "max": round(row[2], 1),
+                "avg": round(row[3], 1), "ideal_pct": round(row[4])
+            },
+            "humidity": {
+                "min": round(row[5], 1), "max": round(row[6], 1),
+                "avg": round(row[7], 1), "ideal_pct": round(row[8])
+            },
+            "co2": {
+                "min": row[9], "max": row[10], "avg": round(row[11]),
+                "below_1000_pct": round(row[12]), "above_1400_pct": round(row[13])
+            }
+        }
+
+    def get_export_rows(self, hours=24):
+        hours = max(1, min(int(hours), 24 * 30))
+        cutoff = (datetime.now(timezone.utc).replace(tzinfo=None) -
+                  timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+        conn = get_db_connection()
+        rows = conn.execute('''
+            SELECT timestamp, co2_ppm, temperature_c, humidity_rh,
+                   rssi, firmware_version, uptime_seconds, reset_reason, warmup
+            FROM baby_readings
+            WHERE timestamp >= ?
+            ORDER BY timestamp ASC
+        ''', (cutoff,)).fetchall()
+        conn.close()
+        return rows
 
 # ============ Flask App ============
 app = Flask(__name__)
@@ -644,6 +892,16 @@ def submit_baby():
         temperature_c = validate_number(data.get("temperature_c"), -10, 60)
         humidity_rh = validate_number(data.get("humidity_rh"), 0, 100)
         rssi = validate_number(data.get("rssi"), -127, 0, integer=True, optional=True)
+        uptime_seconds = validate_number(
+            data.get("uptime_seconds"), 0, 4294967, integer=True, optional=True
+        )
+        reset_reason = str(data.get("reset_reason") or "").strip()
+        warmup = coerce_bool(data.get("warmup"))
+        if warmup is None:
+            try:
+                warmup = int(msg_id.rsplit("-", 1)[-1]) <= 6
+            except (TypeError, ValueError):
+                warmup = False
 
         if not msg_id or not device_id:
             return jsonify({"status": "error", "message": "msg_id and device_id are required"}), 400
@@ -652,7 +910,8 @@ def submit_baby():
 
         inserted = baby_data_manager.add_reading(
             msg_id, device_id, co2_ppm, temperature_c, humidity_rh,
-            rssi, data.get("firmware_version")
+            rssi, data.get("firmware_version"), uptime_seconds,
+            reset_reason, warmup
         )
         message = "Reading recorded" if inserted else "Duplicate msg_id ignored"
         return jsonify({"status": "ok", "message": message}), 200
@@ -813,6 +1072,50 @@ def get_baby_chart():
 def get_baby_stats():
     hours = request.args.get("hours", 24, type=int)
     return jsonify(baby_data_manager.get_statistics(hours))
+
+
+@app.route("/api/baby/events", methods=["GET", "POST"])
+@require_auth
+def baby_events():
+    if request.method == "GET":
+        hours = request.args.get("hours", 24, type=int)
+        return jsonify(baby_data_manager.get_events(hours))
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON object required"}), 400
+    try:
+        event = baby_data_manager.add_event(
+            str(data.get("event_type") or "").strip(), data.get("note")
+        )
+        return jsonify(event), 201
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+
+
+@app.route("/api/baby/night-summary")
+@require_auth
+def get_baby_night_summary():
+    return jsonify(baby_data_manager.get_night_summary())
+
+
+@app.route("/api/baby/export.csv")
+@require_auth
+def export_baby_data():
+    hours = request.args.get("hours", 24, type=int)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "timestamp_utc", "co2_ppm", "temperature_c", "humidity_rh",
+        "rssi", "firmware_version", "uptime_seconds", "reset_reason", "warmup"
+    ])
+    writer.writerows(baby_data_manager.get_export_rows(hours))
+    filename = f"baby-room-{datetime.now().strftime('%Y-%m-%d')}.csv"
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
 def validate_temp(val):
     """Validate temperature values"""

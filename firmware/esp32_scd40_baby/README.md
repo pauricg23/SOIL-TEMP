@@ -42,6 +42,8 @@ Remote controls:
 
 Brightness and power state are saved on the ESP32 and restored after a restart.
 
+The firmware also reports its uptime and reset reason. Readings from the first three minutes after a restart are marked as warm-up data so they can be retained without distorting the dashboard graphs.
+
 ## Configuration
 
 Copy `src/config.example.h` to `src/config.local.h`, then set the Wi-Fi name, Wi-Fi password, Pi ingest token, server URL and device name. The local file is ignored by Git.

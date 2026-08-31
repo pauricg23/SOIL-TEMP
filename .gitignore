@@ -10,3 +10,4 @@ temperature_data.db
 temperature_data.db-wal
 temperature_data.db-shm
 temperature_data.db.bak.*
+backups/

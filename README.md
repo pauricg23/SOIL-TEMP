@@ -25,6 +25,8 @@ End-to-end temperature monitoring for a compost heap (or soil) with:
 
 The PlatformIO project is in `firmware/esp32_scd40_baby`. It reads one SCD40 on GPIO 21/22 and posts to `POST /submit/baby` every 30 seconds over local Wi-Fi. Baby readings use a separate `baby_readings` table in the same SQLite database.
 
+The baby dashboard includes time-bucketed history, overnight summaries, room-event markers, startup/outlier filtering, CSV export and device-health details. Raw readings remain in SQLite even when filtered from graphs.
+
 Copy `firmware/esp32_scd40_baby/src/config.example.h` to `config.local.h` before uploading. Configure the Wi-Fi credentials, existing ingest token and the Pi endpoint. Local secrets are ignored by Git.
 
 ## Running Locally
@@ -64,6 +66,7 @@ Environment overrides:
 
 - SQLite DB file: `temperature_data.db` (ignored by git).
 - WAL mode is enabled for better concurrency on Pi.
+- `scripts/backup_database.py` creates a transactionally safe backup and retains the newest 30 files when used by the timer in `deploy/`.
 
 ## Raspberry Pi Deployment (systemd)
 
@@ -72,6 +75,7 @@ Typical `systemd` setup:
 - Create a venv and install deps in the repo directory.
 - Run `app.py` with a service like `soil-monitor.service`.
 - Ensure `Restart=always` and `WantedBy=multi-user.target` so it comes back after power cuts.
+- Install and enable `deploy/soil-monitor-backup.timer` for automatic daily backups.
 
 ## Cloudflare Tunnel (Optional)
 

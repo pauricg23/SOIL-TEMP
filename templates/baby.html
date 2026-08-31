@@ -98,6 +98,21 @@
         .metric-status.good { background: #dcf1e5; color: #397457; }
         .metric-status.caution { background: #fff0d2; color: #95642f; }
         .metric-status.alert { background: #f8dddd; color: #9b4d4d; }
+        .night-summary, .events { padding: 28px; margin-bottom: 22px; }
+        .section-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; }
+        .summary-source { padding: 6px 10px; border-radius: 999px; background: #f3eefb; color: #78689d; font-size: .74rem; font-weight: 800; }
+        .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 20px; }
+        .summary-item { padding: 16px; border-radius: 18px; background: #faf8fc; }
+        .summary-item strong { display: block; margin-top: 4px; font-size: 1.25rem; }
+        .summary-item span { color: var(--muted); font-size: .78rem; }
+        .comparison { margin: 14px 0 0; color: var(--muted); font-size: .86rem; }
+        .event-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+        button, .button-link { border: 0; border-radius: 999px; padding: 10px 14px; background: #f3eefb; color: var(--ink); font: inherit; font-size: .84rem; font-weight: 800; cursor: pointer; text-decoration: none; }
+        button:hover, .button-link:hover { background: #e8def7; }
+        button:disabled { cursor: wait; opacity: .6; }
+        .event-feed { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; min-height: 28px; }
+        .event-chip { padding: 6px 10px; border-radius: 999px; background: #f8f6fb; color: var(--muted); font-size: .76rem; }
+        .event-feedback { margin-top: 12px; color: #397457; font-size: .82rem; font-weight: 750; }
         .guide { padding: 30px; margin-bottom: 22px; display: grid; grid-template-columns: .75fr 1.25fr; gap: 28px; align-items: center; }
         h2 { margin: 0 0 8px; font-size: 1.55rem; }
         .subtle { margin: 0; color: var(--muted); line-height: 1.55; }
@@ -108,6 +123,7 @@
         .safety { margin-top: 14px !important; padding-top: 14px; border-top: 1px solid rgba(111,98,139,.14); color: var(--muted); font-size: .84rem; }
         .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
         .toolbar select { width: auto; margin: 0; }
+        .toolbar-actions { display: flex; align-items: center; gap: 10px; }
         .charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-bottom: 22px; }
         .chart-card { padding: 24px; min-height: 340px; }
         .chart-card.co2-history { grid-column: 1 / -1; }
@@ -116,16 +132,26 @@
         .stat { padding: 12px; border-radius: 14px; background: #f8f6fb; text-align: center; }
         .stat strong { display: block; font-size: 1.05rem; }
         .stat span { color: var(--muted); font-size: .75rem; }
+        .filtered-note { margin: -8px 0 18px; color: var(--muted); font-size: .78rem; }
+        .device-health { padding: 18px 24px; color: var(--muted); }
+        .device-health summary { cursor: pointer; color: var(--ink); font-weight: 800; }
+        .health-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 14px; }
+        .health-grid span { display: block; font-size: .72rem; }
+        .health-grid strong { color: var(--ink); font-size: .88rem; }
         @media (max-width: 820px) {
             .hero, .guide, .charts { grid-template-columns: 1fr; }
             .grid { grid-template-columns: 1fr; }
+            .summary-grid, .health-grid { grid-template-columns: repeat(2, 1fr); }
             .temperature { min-height: 300px; }
         }
         @media (max-width: 520px) {
             .shell { width: min(94vw, 1180px); }
-            .welcome, .guide { padding: 22px; }
+            .welcome, .guide, .night-summary, .events { padding: 22px; }
             .welcome::after { display: none; }
             .nav-links { gap: 10px; font-size: .88rem; }
+            .toolbar { align-items: flex-start; flex-direction: column; }
+            .toolbar-actions { width: 100%; }
+            .toolbar select { flex: 1; }
         }
     </style>
 </head>
@@ -166,6 +192,39 @@
             </article>
         </section>
 
+        <section class="card night-summary">
+            <div class="section-heading">
+                <div>
+                    <p class="eyebrow">Last night</p>
+                    <h2>How the room slept</h2>
+                    <p id="nightPeriod" class="subtle">Waiting for enough overnight data</p>
+                </div>
+                <span id="nightSource" class="summary-source">Estimated times</span>
+            </div>
+            <div id="nightSummary" class="summary-grid">
+                <div class="summary-item"><span>Temperature</span><strong>--</strong></div>
+                <div class="summary-item"><span>Humidity</span><strong>--</strong></div>
+                <div class="summary-item"><span>Average CO₂</span><strong>--</strong></div>
+                <div class="summary-item"><span>Fresh-air time</span><strong>--</strong></div>
+            </div>
+            <p id="nightComparison" class="comparison"></p>
+        </section>
+
+        <section class="card events">
+            <div class="section-heading">
+                <div><h2>Add a room note</h2><p class="subtle">These markers help explain changes on the graphs.</p></div>
+            </div>
+            <div class="event-buttons">
+                <button type="button" data-event="bedtime">🌙 Bedtime</button>
+                <button type="button" data-event="got_up">☀️ Got up</button>
+                <button type="button" data-event="window_opened">🪟 Window opened</button>
+                <button type="button" data-event="dehumidifier_on">💧 Dehumidifier on</button>
+                <button type="button" data-event="dehumidifier_off">✓ Dehumidifier off</button>
+            </div>
+            <div id="eventFeedback" class="event-feedback" aria-live="polite"></div>
+            <div id="eventFeed" class="event-feed"></div>
+        </section>
+
         <section class="card guide">
             <div>
                 <p class="eyebrow">Sleepwear helper</p>
@@ -188,14 +247,18 @@
 
         <div class="toolbar">
             <div><h2>Room history</h2><p class="subtle">How the room has changed over time</p></div>
-            <select id="hours">
-                <option value="1">Last hour</option>
-                <option value="6">Last 6 hours</option>
-                <option value="24" selected>Last 24 hours</option>
-                <option value="168">Last 7 days</option>
-                <option value="720">Last 30 days</option>
-            </select>
+            <div class="toolbar-actions">
+                <select id="hours">
+                    <option value="1">Last hour</option>
+                    <option value="6">Last 6 hours</option>
+                    <option value="24" selected>Last 24 hours</option>
+                    <option value="168">Last 7 days</option>
+                    <option value="720">Last 30 days</option>
+                </select>
+                <a id="exportLink" class="button-link" href="/api/baby/export.csv?hours=24">Export CSV</a>
+            </div>
         </div>
+        <p class="filtered-note">Night shading and event markers add context. Startup and isolated sensor anomalies are excluded from these charts.</p>
 
         <section class="charts">
             <article class="card chart-card">
@@ -214,6 +277,16 @@
                 <div id="co2Stats" class="stats"></div>
             </article>
         </section>
+
+        <details class="card device-health">
+            <summary>Sensor details</summary>
+            <div class="health-grid">
+                <div><span>Firmware</span><strong id="healthFirmware">--</strong></div>
+                <div><span>Uptime</span><strong id="healthUptime">--</strong></div>
+                <div><span>Last reset</span><strong id="healthReset">--</strong></div>
+                <div><span>Wi-Fi signal</span><strong id="healthSignal">--</strong></div>
+            </div>
+        </details>
 
     </div>
 
@@ -245,6 +318,83 @@
         let temperatureChart;
         let humidityChart;
         let co2Chart;
+        let refreshing = false;
+
+        const thresholdBandsPlugin = {
+            id: "thresholdBands",
+            beforeDraw(chart, _args, options) {
+                if (!options || !options.bands || !chart.chartArea) return;
+                const {ctx, chartArea, scales: {y}} = chart;
+                ctx.save();
+                options.bands.forEach(band => {
+                    const first = Math.max(chartArea.top, Math.min(chartArea.bottom, y.getPixelForValue(band.from)));
+                    const second = Math.max(chartArea.top, Math.min(chartArea.bottom, y.getPixelForValue(band.to)));
+                    ctx.fillStyle = band.color;
+                    ctx.fillRect(chartArea.left, Math.min(first, second), chartArea.width, Math.abs(second - first));
+                });
+                ctx.restore();
+            }
+        };
+
+        const nightShadePlugin = {
+            id: "nightShade",
+            beforeDatasetsDraw(chart, _args, options) {
+                const timestamps = options && options.timestamps;
+                if (!timestamps || timestamps.length < 2 || !chart.chartArea) return;
+                const {ctx, chartArea, scales: {x}} = chart;
+                ctx.save();
+                ctx.fillStyle = "rgba(86, 72, 122, .045)";
+                timestamps.forEach((timestamp, index) => {
+                    const hour = parseTimestamp(timestamp).getHours();
+                    if (hour < 7 || hour >= 19) {
+                        const left = index === 0 ? chartArea.left : (x.getPixelForValue(index - 1) + x.getPixelForValue(index)) / 2;
+                        const right = index === timestamps.length - 1 ? chartArea.right : (x.getPixelForValue(index) + x.getPixelForValue(index + 1)) / 2;
+                        ctx.fillRect(left, chartArea.top, right - left, chartArea.height);
+                    }
+                });
+                ctx.restore();
+            }
+        };
+
+        const eventMarkersPlugin = {
+            id: "eventMarkers",
+            afterDatasetsDraw(chart, _args, options) {
+                const timestamps = options && options.timestamps;
+                const events = options && options.events;
+                if (!timestamps || !timestamps.length || !events || !events.length) return;
+                const firstTime = parseTimestamp(timestamps[0]).getTime();
+                const lastTime = parseTimestamp(timestamps[timestamps.length - 1]).getTime();
+                const {ctx, chartArea, scales: {x}} = chart;
+                ctx.save();
+                ctx.font = "700 10px system-ui";
+                events.slice(0, 20).forEach((event, eventIndex) => {
+                    const eventTime = parseTimestamp(event.timestamp).getTime();
+                    if (eventTime < firstTime || eventTime > lastTime) return;
+                    let nearestIndex = 0;
+                    let nearestDistance = Infinity;
+                    timestamps.forEach((timestamp, index) => {
+                        const distance = Math.abs(parseTimestamp(timestamp).getTime() - eventTime);
+                        if (distance < nearestDistance) {
+                            nearestDistance = distance;
+                            nearestIndex = index;
+                        }
+                    });
+                    const pixel = x.getPixelForValue(nearestIndex);
+                    ctx.strokeStyle = "rgba(112, 92, 153, .42)";
+                    ctx.setLineDash([4, 4]);
+                    ctx.beginPath();
+                    ctx.moveTo(pixel, chartArea.top);
+                    ctx.lineTo(pixel, chartArea.bottom);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    ctx.fillStyle = "#6e5d91";
+                    ctx.fillText(event.label, pixel + 4, chartArea.top + 12 + (eventIndex % 2) * 12);
+                });
+                ctx.restore();
+            }
+        };
+
+        Chart.register(thresholdBandsPlugin, nightShadePlugin, eventMarkersPlugin);
 
         function temperatureBand(value) {
             if (value < 16) return "blue";
@@ -269,13 +419,25 @@
             element.className = `metric-status ${className}`;
         }
 
+        function parseTimestamp(timestamp) {
+            return new Date(timestamp.replace(" ", "T") + "Z");
+        }
+
         function formatTime(timestamp) {
-            return new Date(timestamp.replace(" ", "T") + "Z").toLocaleString([], {
+            return parseTimestamp(timestamp).toLocaleString([], {
                 day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"
             });
         }
 
-        function updateCurrent(latest) {
+        function formatClock(timestamp) {
+            return parseTimestamp(timestamp).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+        }
+
+        function average(values) {
+            return values.length ? values.reduce((total, value) => total + value, 0) / values.length : null;
+        }
+
+        function updateCurrent(latest, rows) {
             latestTemperature = latest.temperature_c;
             const band = temperatureBand(latest.temperature_c);
             const labels = {blue: "Too cold", yellow: "Recommended", orange: "Warm", red: "Too warm"};
@@ -286,20 +448,44 @@
             document.getElementById("co2Value").textContent = `${latest.co2_ppm} ppm`;
             document.getElementById("humidityValue").textContent = `${latest.humidity_rh.toFixed(1)}%`;
 
-            if (latest.co2_ppm < 800) setStatus("co2Status", "Fresh", "good");
-            else if (latest.co2_ppm <= 1000) setStatus("co2Status", "Ventilation rising", "caution");
+            const tenMinutesAgo = parseTimestamp(latest.timestamp).getTime() - 10 * 60 * 1000;
+            const recentCo2 = rows
+                .filter(row => parseTimestamp(row.timestamp).getTime() >= tenMinutesAgo)
+                .map(row => row.co2_ppm);
+            const sustainedCo2 = average(recentCo2) || latest.co2_ppm;
+            if (sustainedCo2 < 800) setStatus("co2Status", "Fresh air", "good");
+            else if (sustainedCo2 <= 1000) setStatus("co2Status", "Good ventilation", "good");
+            else if (sustainedCo2 <= 1400) setStatus("co2Status", "Ventilation could be improved", "caution");
             else setStatus("co2Status", "Ventilate the room", "alert");
 
             if (latest.humidity_rh >= 40 && latest.humidity_rh <= 60) setStatus("humidityStatus", "Comfortable", "good");
-            else if (latest.humidity_rh >= 30 && latest.humidity_rh <= 70) setStatus("humidityStatus", "Outside ideal range", "caution");
-            else setStatus("humidityStatus", "Needs attention", "alert");
+            else if (latest.humidity_rh < 40 && latest.humidity_rh >= 30) setStatus("humidityStatus", "A little dry", "caution");
+            else if (latest.humidity_rh > 60 && latest.humidity_rh <= 70) setStatus("humidityStatus", "A little humid", "caution");
+            else if (latest.humidity_rh > 70) setStatus("humidityStatus", "High humidity", "alert");
+            else setStatus("humidityStatus", "Very dry", "alert");
 
             const badge = document.getElementById("onlineBadge");
             badge.className = latest.online ? "online" : "online offline";
-            badge.textContent = latest.online
-                ? `Sensor online · updated ${latest.age_seconds}s ago`
-                : `Sensor offline · last update ${formatTime(latest.timestamp)}`;
+            if (latest.online && latest.warming_up) {
+                badge.textContent = "Sensor online · stabilising after restart";
+            } else {
+                badge.textContent = latest.online
+                    ? `Sensor online · updated ${latest.age_seconds}s ago`
+                    : `Sensor offline · last update ${formatTime(latest.timestamp)}`;
+            }
+            document.getElementById("healthFirmware").textContent = latest.firmware_version || "--";
+            document.getElementById("healthUptime").textContent = formatUptime(latest.uptime_seconds);
+            document.getElementById("healthReset").textContent = latest.reset_reason
+                ? latest.reset_reason.replaceAll("_", " ") : "Not reported yet";
+            document.getElementById("healthSignal").textContent = latest.rssi === null ? "--" : `${latest.rssi} dBm`;
             updateGuide();
+        }
+
+        function formatUptime(seconds) {
+            if (seconds === null || seconds === undefined) return "Not reported yet";
+            if (seconds < 3600) return `${Math.floor(seconds / 60)} minutes`;
+            if (seconds < 86400) return `${(seconds / 3600).toFixed(1)} hours`;
+            return `${(seconds / 86400).toFixed(1)} days`;
         }
 
         function statMarkup(items) {
@@ -325,12 +511,17 @@
             ]);
         }
 
-        function chartOptions(unit) {
+        function chartOptions(unit, bands, rows, events) {
             return {
                 responsive: true,
                 maintainAspectRatio: false,
                 interaction: {mode: "index", intersect: false},
-                plugins: {legend: {labels: {usePointStyle: true, boxWidth: 8}}},
+                plugins: {
+                    legend: {labels: {usePointStyle: true, boxWidth: 8}},
+                    thresholdBands: {bands},
+                    nightShade: {timestamps: rows.map(row => row.timestamp)},
+                    eventMarkers: {timestamps: rows.map(row => row.timestamp), events}
+                },
                 scales: {
                     x: {grid: {display: false}, ticks: {maxTicksLimit: 6}},
                     y: {
@@ -341,7 +532,7 @@
             };
         }
 
-        function updateCharts(rows) {
+        function updateCharts(rows, events) {
             const ordered = [...rows].reverse();
             const labels = ordered.map(row => formatTime(row.timestamp));
             if (temperatureChart) temperatureChart.destroy();
@@ -352,48 +543,123 @@
                 data: {labels, datasets: [
                     {label: "Temperature °C", data: ordered.map(row => row.temperature_c), borderColor: "#c58b9e", backgroundColor: "rgba(197,139,158,.12)", fill: true, tension: .35, pointRadius: 0}
                 ]},
-                options: chartOptions("°C")
+                options: chartOptions("°C", [
+                    {from: 16, to: 20, color: "rgba(114,174,145,.10)"}
+                ], ordered, events)
             });
             humidityChart = new Chart(document.getElementById("humidityChart"), {
                 type: "line",
                 data: {labels, datasets: [
                     {label: "Humidity %", data: ordered.map(row => row.humidity_rh), borderColor: "#7aa9c6", backgroundColor: "rgba(122,169,198,.12)", fill: true, tension: .35, pointRadius: 0}
                 ]},
-                options: chartOptions("%")
+                options: chartOptions("%", [
+                    {from: 40, to: 60, color: "rgba(122,169,198,.10)"}
+                ], ordered, events)
             });
             co2Chart = new Chart(document.getElementById("co2Chart"), {
                 type: "line",
                 data: {labels, datasets: [
                     {label: "CO₂ ppm", data: ordered.map(row => row.co2_ppm), borderColor: "#72ae91", backgroundColor: "rgba(114,174,145,.16)", fill: true, tension: .35, pointRadius: 0}
                 ]},
-                options: chartOptions("ppm")
+                options: chartOptions("ppm", [
+                    {from: 0, to: 800, color: "rgba(114,174,145,.08)"},
+                    {from: 800, to: 1000, color: "rgba(255,228,167,.12)"},
+                    {from: 1000, to: 1400, color: "rgba(255,197,143,.10)"},
+                    {from: 1400, to: 5000, color: "rgba(243,166,166,.10)"}
+                ], ordered, events)
             });
         }
 
-        async function refreshDashboard() {
-            const hours = document.getElementById("hours").value;
+        function updateNightSummary(summary) {
+            if (!summary) return;
+            document.getElementById("nightPeriod").textContent =
+                `${formatTime(summary.start)} to ${formatClock(summary.end)} · ${summary.duration_hours} hours`;
+            document.getElementById("nightSource").textContent = summary.source === "recorded"
+                ? (summary.completed ? "Recorded times" : "Night in progress")
+                : "Estimated 8pm–9am";
+            document.getElementById("nightSummary").innerHTML = [
+                ["Temperature", `${summary.temperature.avg.toFixed(1)}°C`, `${summary.temperature.ideal_pct}% in 16–20°`],
+                ["Humidity", `${summary.humidity.avg.toFixed(1)}%`, `${summary.humidity.ideal_pct}% comfortable`],
+                ["Average CO₂", `${summary.co2.avg} ppm`, `High ${summary.co2.max} ppm`],
+                ["Below 1000 ppm", `${summary.co2.below_1000_pct}%`, `${summary.co2.above_1400_pct}% above 1400`]
+            ].map(item => `<div class="summary-item"><span>${item[0]}</span><strong>${item[1]}</strong><span>${item[2]}</span></div>`).join("");
+
+            const comparison = summary.comparison;
+            if (!comparison) {
+                document.getElementById("nightComparison").textContent = "More nights will unlock night-to-night comparisons.";
+                return;
+            }
+            const co2Direction = comparison.co2_avg_delta === 0 ? "the same as" :
+                `${Math.abs(comparison.co2_avg_delta)} ppm ${comparison.co2_avg_delta < 0 ? "lower" : "higher"} than`;
+            document.getElementById("nightComparison").textContent =
+                `Compared with the previous night: CO₂ was ${co2Direction} before; humidity changed by ${comparison.humidity_avg_delta > 0 ? "+" : ""}${comparison.humidity_avg_delta}%.`;
+        }
+
+        function updateEvents(events) {
+            const feed = document.getElementById("eventFeed");
+            feed.innerHTML = events.length
+                ? events.slice(0, 8).map(event => `<span class="event-chip">${event.label} · ${formatTime(event.timestamp)}</span>`).join("")
+                : '<span class="subtle">No room notes in this period yet.</span>';
+        }
+
+        async function recordEvent(eventType, button) {
+            button.disabled = true;
+            const feedback = document.getElementById("eventFeedback");
             try {
-                const [statsResponse, chartResponse] = await Promise.all([
+                const response = await fetch("/api/baby/events", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({event_type: eventType})
+                });
+                if (!response.ok) throw new Error("Could not save room note");
+                const event = await response.json();
+                feedback.textContent = `${event.label} saved at ${formatClock(event.timestamp)}.`;
+                await refreshDashboard();
+            } catch (_error) {
+                feedback.textContent = "That room note could not be saved. Please try again.";
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        async function refreshDashboard() {
+            if (refreshing) return;
+            refreshing = true;
+            const hours = document.getElementById("hours").value;
+            document.getElementById("exportLink").href = `/api/baby/export.csv?hours=${hours}`;
+            try {
+                const [statsResponse, chartResponse, eventsResponse, nightResponse] = await Promise.all([
                     fetch(`/api/baby/stats?hours=${hours}`),
-                    fetch(`/api/baby/chart?hours=${hours}&max_points=1500`)
+                    fetch(`/api/baby/chart?hours=${hours}&max_points=1500`),
+                    fetch(`/api/baby/events?hours=${hours}`),
+                    fetch("/api/baby/night-summary")
                 ]);
-                if (!statsResponse.ok || !chartResponse.ok) {
+                if (!statsResponse.ok || !chartResponse.ok || !eventsResponse.ok || !nightResponse.ok) {
                     throw new Error("Dashboard request failed");
                 }
                 const stats = await statsResponse.json();
                 const chartRows = await chartResponse.json();
-                if (stats.latest) updateCurrent(stats.latest);
+                const events = await eventsResponse.json();
+                const nightSummary = await nightResponse.json();
+                if (stats.latest) updateCurrent(stats.latest, chartRows);
                 updateStats(stats);
-                updateCharts(chartRows);
+                updateCharts(chartRows, events);
+                updateEvents(events);
+                updateNightSummary(nightSummary);
             } catch (error) {
                 const badge = document.getElementById("onlineBadge");
                 badge.className = "online offline";
                 badge.textContent = "Unable to reach the monitor";
+            } finally {
+                refreshing = false;
             }
         }
 
         document.getElementById("beddingMode").addEventListener("change", updateGuide);
         document.getElementById("hours").addEventListener("change", refreshDashboard);
+        document.querySelectorAll("[data-event]").forEach(button => {
+            button.addEventListener("click", () => recordEvent(button.dataset.event, button));
+        });
         refreshDashboard();
         setInterval(refreshDashboard, 30000);
     </script>

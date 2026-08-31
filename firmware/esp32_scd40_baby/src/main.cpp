@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <esp_system.h>
 #include <HTTPClient.h>
 #include <IRrecv.h>
 #include <IRremoteESP8266.h>
@@ -37,7 +38,8 @@ constexpr unsigned long SAMPLE_INTERVAL_MS = 30000;
 constexpr unsigned long RETRY_INTERVAL_MS = 5000;
 constexpr unsigned long WIFI_RETRY_INTERVAL_MS = 10000;
 constexpr unsigned long SENSOR_RETRY_INTERVAL_MS = 10000;
-constexpr char FIRMWARE_VERSION[] = "BABY_SCD40_1.1.0";
+constexpr unsigned long SENSOR_WARMUP_MS = 180000;
+constexpr char FIRMWARE_VERSION[] = "BABY_SCD40_1.2.0";
 
 constexpr uint64_t IR_POWER = 0xFFA25D;
 constexpr uint64_t IR_VOLUME_UP = 0xFF629D;
@@ -63,6 +65,23 @@ bool sensorReady = false;
 bool lightEnabled = true;
 uint8_t lightBrightness = DEFAULT_BRIGHTNESS;
 float latestTemperatureC = NAN;
+esp_reset_reason_t lastResetReason = ESP_RST_UNKNOWN;
+
+const char* resetReasonName(esp_reset_reason_t reason) {
+    switch (reason) {
+        case ESP_RST_POWERON: return "power_on";
+        case ESP_RST_EXT: return "external_reset";
+        case ESP_RST_SW: return "software_reset";
+        case ESP_RST_PANIC: return "panic";
+        case ESP_RST_INT_WDT: return "interrupt_watchdog";
+        case ESP_RST_TASK_WDT: return "task_watchdog";
+        case ESP_RST_WDT: return "watchdog";
+        case ESP_RST_DEEPSLEEP: return "deep_sleep";
+        case ESP_RST_BROWNOUT: return "brownout";
+        case ESP_RST_SDIO: return "sdio";
+        default: return "unknown";
+    }
+}
 
 void writeRgb(uint8_t red, uint8_t green, uint8_t blue) {
     if (!lightEnabled) {
@@ -307,25 +326,32 @@ bool readSensor() {
     }
 
     readingSequence++;
+    bool warmingUp = millis() < SENSOR_WARMUP_MS;
     char messageId[80];
     snprintf(messageId, sizeof messageId, "%s-%08lx-%lu", BABY_DEVICE_ID,
              static_cast<unsigned long>(bootId),
              static_cast<unsigned long>(readingSequence));
 
-    char payload[384];
+    char payload[512];
     snprintf(payload, sizeof payload,
              "{\"msg_id\":\"%s\",\"device_id\":\"%s\",\"co2_ppm\":%u,"
              "\"temperature_c\":%.2f,\"humidity_rh\":%.2f,\"rssi\":%d,"
-             "\"firmware_version\":\"%s\"}",
+             "\"firmware_version\":\"%s\",\"uptime_seconds\":%lu,"
+             "\"reset_reason\":\"%s\",\"warmup\":%s}",
              messageId, BABY_DEVICE_ID, co2Ppm, temperatureC, humidityRh,
              WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : -127,
-             FIRMWARE_VERSION);
+             FIRMWARE_VERSION, static_cast<unsigned long>(millis() / 1000),
+             resetReasonName(lastResetReason), warmingUp ? "true" : "false");
     pendingPayload = payload;
 
     Serial.printf("SCD40: %u ppm, %.2f C, %.2f %%RH\n",
                   co2Ppm, temperatureC, humidityRh);
-    latestTemperatureC = temperatureC;
-    updateTemperatureLight();
+    if (warmingUp) {
+        Serial.println("SCD40 warming up; dashboard will exclude this reading");
+    } else {
+        latestTemperatureC = temperatureC;
+        updateTemperatureLight();
+    }
     return true;
 }
 
@@ -333,6 +359,8 @@ void setup() {
     Serial.begin(115200);
     delay(800);
     Serial.println("\nBaby room monitor starting");
+    lastResetReason = esp_reset_reason();
+    Serial.printf("Reset reason: %s\n", resetReasonName(lastResetReason));
     bootId = esp_random();
     initializeRoomLight();
 
