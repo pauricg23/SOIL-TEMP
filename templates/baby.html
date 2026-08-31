@@ -402,9 +402,9 @@
                 const {ctx, chartArea, scales: {x}} = chart;
                 ctx.save();
                 ctx.font = "700 10px system-ui";
-                events.slice(0, 20).forEach((event, eventIndex) => {
+                const markers = events.slice(0, 20).map(event => {
                     const eventTime = parseTimestamp(event.timestamp).getTime();
-                    if (eventTime < firstTime || eventTime > lastTime) return;
+                    if (eventTime < firstTime || eventTime > lastTime) return null;
                     let nearestIndex = 0;
                     let nearestDistance = Infinity;
                     timestamps.forEach((timestamp, index) => {
@@ -414,16 +414,56 @@
                             nearestIndex = index;
                         }
                     });
-                    const pixel = x.getPixelForValue(nearestIndex);
+                    return {event, pixel: x.getPixelForValue(nearestIndex)};
+                }).filter(Boolean).sort((first, second) => first.pixel - second.pixel);
+
+                markers.forEach(marker => {
                     ctx.strokeStyle = "rgba(112, 92, 153, .42)";
                     ctx.setLineDash([4, 4]);
                     ctx.beginPath();
-                    ctx.moveTo(pixel, chartArea.top);
-                    ctx.lineTo(pixel, chartArea.bottom);
+                    ctx.moveTo(marker.pixel, chartArea.top);
+                    ctx.lineTo(marker.pixel, chartArea.bottom);
                     ctx.stroke();
-                    ctx.setLineDash([]);
+                });
+                ctx.setLineDash([]);
+
+                const placedLabels = [];
+                markers.forEach(marker => {
+                    const textWidth = ctx.measureText(marker.event.label).width;
+                    const width = textWidth + 10;
+                    let left = marker.pixel + 4;
+                    if (left + width > chartArea.right) left = marker.pixel - width - 4;
+                    left = Math.max(chartArea.left + 2, Math.min(left, chartArea.right - width - 2));
+
+                    let top = null;
+                    for (let lane = 0; lane < 6; lane++) {
+                        const candidateTop = chartArea.top + 4 + lane * 19;
+                        const candidate = {
+                            left,
+                            right: left + width,
+                            top: candidateTop,
+                            bottom: candidateTop + 16
+                        };
+                        const overlaps = placedLabels.some(label => !(
+                            candidate.right + 4 < label.left ||
+                            candidate.left > label.right + 4 ||
+                            candidate.bottom < label.top ||
+                            candidate.top > label.bottom
+                        ));
+                        if (!overlaps && candidate.bottom < chartArea.bottom) {
+                            top = candidateTop;
+                            placedLabels.push(candidate);
+                            break;
+                        }
+                    }
+                    if (top === null) return;
+
+                    ctx.fillStyle = "rgba(255, 253, 255, .94)";
+                    ctx.fillRect(left, top, width, 16);
+                    ctx.strokeStyle = "rgba(112, 92, 153, .18)";
+                    ctx.strokeRect(left, top, width, 16);
                     ctx.fillStyle = "#6e5d91";
-                    ctx.fillText(event.label, pixel + 4, chartArea.top + 12 + (eventIndex % 2) * 12);
+                    ctx.fillText(marker.event.label, left + 5, top + 11);
                 });
                 ctx.restore();
             }
