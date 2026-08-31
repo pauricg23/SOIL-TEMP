@@ -732,6 +732,20 @@ class BabyDataManager:
         conn.close()
         return self._event_dict(row)
 
+    def delete_event(self, event_id):
+        conn = get_db_connection()
+        row = conn.execute('''
+            SELECT id, timestamp, event_type, note
+            FROM baby_events WHERE id = ?
+        ''', (event_id,)).fetchone()
+        if row is None:
+            conn.close()
+            return None
+        conn.execute("DELETE FROM baby_events WHERE id = ?", (event_id,))
+        conn.commit()
+        conn.close()
+        return self._event_dict(row)
+
     @staticmethod
     def _normalise_event_timestamp(value):
         if value is None or str(value).strip() == "":
@@ -1348,6 +1362,15 @@ def baby_events():
 @require_auth
 def baby_event_states():
     return jsonify(baby_data_manager.get_event_states())
+
+
+@app.route("/api/baby/events/<int:event_id>", methods=["DELETE"])
+@require_auth
+def delete_baby_event(event_id):
+    event = baby_data_manager.delete_event(event_id)
+    if event is None:
+        return jsonify({"error": "Room activity tag not found"}), 404
+    return jsonify({"deleted": event})
 
 
 @app.route("/api/baby/night-summary")

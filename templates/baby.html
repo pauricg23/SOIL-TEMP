@@ -130,7 +130,8 @@
         button:hover, .button-link:hover { background: #e8def7; }
         button:disabled { cursor: wait; opacity: .6; }
         .event-feed { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; min-height: 28px; }
-        .event-chip { padding: 6px 10px; border-radius: 999px; background: #f8f6fb; color: var(--muted); font-size: .76rem; }
+        .event-chip { padding: 6px 10px; border-radius: 999px; background: #f8f6fb; color: var(--muted); font-size: .76rem; cursor: context-menu; user-select: none; }
+        .event-help { margin: 14px 0 -6px; color: var(--muted); font-size: .76rem; }
         .event-feedback { margin-top: 12px; color: #397457; font-size: .82rem; font-weight: 750; }
         .guide { padding: 30px; margin-bottom: 22px; display: grid; grid-template-columns: .75fr 1.25fr; gap: 28px; align-items: center; }
         h2 { margin: 0 0 8px; font-size: 1.55rem; }
@@ -295,6 +296,7 @@
                 </button>
             </div>
             <div id="eventFeedback" class="event-feedback" aria-live="polite"></div>
+            <p class="event-help">Saved tags · right-click any tag here or on a graph to delete it.</p>
             <div id="eventFeed" class="event-feed"></div>
         </section>
 
@@ -399,6 +401,7 @@
         let humidityChart;
         let co2Chart;
         let refreshing = false;
+        let latestEvents = new Map();
 
         const thresholdBandsPlugin = {
             id: "thresholdBands",
@@ -439,6 +442,7 @@
         const eventMarkersPlugin = {
             id: "eventMarkers",
             afterDatasetsDraw(chart, _args, options) {
+                chart.$eventMarkerRegions = [];
                 const timestamps = options && options.timestamps;
                 const events = options && options.events;
                 if (!timestamps || !timestamps.length || !events || !events.length) return;
@@ -509,6 +513,13 @@
                     ctx.strokeRect(left, top, width, 16);
                     ctx.fillStyle = "#6e5d91";
                     ctx.fillText(marker.event.label, left + 5, top + 11);
+                    chart.$eventMarkerRegions.push({
+                        event: marker.event,
+                        left,
+                        right: left + width,
+                        top,
+                        bottom: top + 16
+                    });
                 });
                 ctx.restore();
             }
@@ -823,9 +834,42 @@
 
         function updateEvents(events) {
             const feed = document.getElementById("eventFeed");
+            latestEvents = new Map(events.map(event => [event.id, event]));
             feed.innerHTML = events.length
-                ? events.slice(0, 8).map(event => `<span class="event-chip">${event.label} · ${formatTime(event.timestamp)}</span>`).join("")
+                ? events.slice(0, 8).map(event => `<span class="event-chip" data-event-id="${event.id}" title="Right-click to delete">${event.label} · ${formatTime(event.timestamp)}</span>`).join("")
                 : '<span class="subtle">No room notes in this period yet.</span>';
+        }
+
+        async function deleteEventTag(savedEvent) {
+            const confirmed = window.confirm(
+                `Delete the “${savedEvent.label}” tag saved for ${formatTime(savedEvent.timestamp)}?`
+            );
+            if (!confirmed) return;
+            const feedback = document.getElementById("eventFeedback");
+            try {
+                const response = await fetch(`/api/baby/events/${savedEvent.id}`, {method: "DELETE"});
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || "Could not delete that tag");
+                feedback.textContent = `${result.deleted.label} tag deleted.`;
+                await refreshDashboard();
+            } catch (error) {
+                feedback.textContent = error.message || "That tag could not be deleted. Please try again.";
+            }
+        }
+
+        function deleteChartTag(pointerEvent, chart) {
+            const regions = chart && chart.$eventMarkerRegions;
+            if (!regions || !regions.length) return;
+            const bounds = chart.canvas.getBoundingClientRect();
+            const x = (pointerEvent.clientX - bounds.left) * (chart.width / bounds.width);
+            const y = (pointerEvent.clientY - bounds.top) * (chart.height / bounds.height);
+            const region = regions.find(item => (
+                x >= item.left && x <= item.right && y >= item.top && y <= item.bottom
+            ));
+            if (!region) return;
+            pointerEvent.preventDefault();
+            pointerEvent.stopPropagation();
+            deleteEventTag(region.event);
         }
 
         function updateToggleStates(states) {
@@ -924,6 +968,23 @@
             document.getElementById("eventFeedback").textContent = "The next change will use the current time.";
         });
         document.getElementById("eventTime").addEventListener("focus", updateEventTimeLimit);
+        document.getElementById("eventFeed").addEventListener("contextmenu", pointerEvent => {
+            const chip = pointerEvent.target.closest("[data-event-id]");
+            if (!chip) return;
+            const savedEvent = latestEvents.get(Number(chip.dataset.eventId));
+            if (!savedEvent) return;
+            pointerEvent.preventDefault();
+            deleteEventTag(savedEvent);
+        });
+        [
+            ["temperatureChart", () => temperatureChart],
+            ["humidityChart", () => humidityChart],
+            ["co2Chart", () => co2Chart]
+        ].forEach(([canvasId, getChart]) => {
+            document.getElementById(canvasId).addEventListener("contextmenu", pointerEvent => {
+                deleteChartTag(pointerEvent, getChart());
+            });
+        });
         document.querySelectorAll("[data-toggle]").forEach(button => {
             button.addEventListener("click", () => recordToggle(button.dataset.toggle, button));
         });

@@ -301,6 +301,7 @@ class BabyMonitorTest(unittest.TestCase):
                     -60, "BABY_SCD40_1.2.0", 1000 + index * 3600,
                     "power_on", 0
                 ))
+
         conn.executemany('''
             INSERT INTO baby_readings
                 (timestamp, msg_id, device_id, co2_ppm, temperature_c,
@@ -322,6 +323,39 @@ class BabyMonitorTest(unittest.TestCase):
             summary["rolling_comparison"]["temperature_position"], "coldest"
         )
         self.assertLess(summary["rolling_comparison"]["temperature_avg_delta"], 0)
+
+    def test_baby_event_deletion_removes_only_selected_tag(self):
+        bedtime = self.client.post(
+            "/api/baby/events", json={"event_type": "bedtime"},
+            headers=self.auth_headers()
+        ).get_json()
+        heating = self.client.post(
+            "/api/baby/events", json={"event_type": "heating_on"},
+            headers=self.auth_headers()
+        ).get_json()
+        self.client.post(
+            "/submit/baby", json=self.valid_reading(),
+            headers=self.ingest_headers()
+        )
+
+        route = f"/api/baby/events/{bedtime['id']}"
+        self.assertEqual(self.client.delete(route).status_code, 401)
+        deleted = self.client.delete(route, headers=self.auth_headers())
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(deleted.get_json()["deleted"]["event_type"], "bedtime")
+        self.assertEqual(
+            self.client.delete(route, headers=self.auth_headers()).status_code,
+            404
+        )
+
+        conn = sqlite3.connect(TEST_DB)
+        events = conn.execute(
+            "SELECT id, event_type FROM baby_events ORDER BY id"
+        ).fetchall()
+        reading_count = conn.execute("SELECT COUNT(*) FROM baby_readings").fetchone()[0]
+        conn.close()
+        self.assertEqual(events, [(heating["id"], "heating_on")])
+        self.assertEqual(reading_count, 1)
 
     def test_estimated_night_window_runs_eleven_to_nine(self):
         now_utc = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
