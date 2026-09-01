@@ -454,6 +454,7 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertIn(b'id="eventTime"', baby.data)
         self.assertIn(b"occurredAt = chosenTime", baby.data)
         self.assertIn(b"The next change will be saved for", baby.data)
+        self.assertNotIn(b"eventTime < firstTime", baby.data)
         self.assertNotIn(b'data-event="heating_off"', baby.data)
         self.assertIn(b'id="exportLink"', baby.data)
         self.assertIn(b'id="healthUptime"', baby.data)

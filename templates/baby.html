@@ -446,14 +446,11 @@
                 const timestamps = options && options.timestamps;
                 const events = options && options.events;
                 if (!timestamps || !timestamps.length || !events || !events.length) return;
-                const firstTime = parseTimestamp(timestamps[0]).getTime();
-                const lastTime = parseTimestamp(timestamps[timestamps.length - 1]).getTime();
                 const {ctx, chartArea, scales: {x}} = chart;
                 ctx.save();
                 ctx.font = "700 10px system-ui";
                 const markers = events.slice(0, 20).map(event => {
                     const eventTime = parseTimestamp(event.timestamp).getTime();
-                    if (eventTime < firstTime || eventTime > lastTime) return null;
                     let nearestIndex = 0;
                     let nearestDistance = Infinity;
                     timestamps.forEach((timestamp, index) => {
