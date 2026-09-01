@@ -152,24 +152,25 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertEqual(first["observed_at"], "2026-08-31 12:15:00")
         self.assertEqual(second, first)
         urlopen.assert_called_once()
+        self.assertIn("past_days=9", urlopen.call_args.args[0].full_url)
 
-    def test_weather_service_compares_previous_five_nights(self):
+    def test_weather_service_compares_previous_seven_nights(self):
         dublin = monitor_app.ZoneInfo("Europe/Dublin")
         now_local = datetime.now(timezone.utc).astimezone(dublin)
         end_local = now_local.replace(hour=9, minute=0, second=0, microsecond=0)
         if now_local.hour < 9:
             end_local -= timedelta(days=1)
         start_local = (end_local - timedelta(days=1)).replace(hour=23)
-        temperatures = [8.0, 10.0, 11.0, 12.0, 13.0, 14.0]
+        temperatures = [8.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0]
         timestamps = [
             (start_local - timedelta(days=day_offset) + timedelta(hours=2))
             .astimezone(timezone.utc).replace(tzinfo=None).isoformat(timespec="minutes")
-            for day_offset in range(6)
+            for day_offset in range(8)
         ]
         comparison = monitor_app.WeatherService._night_comparison({
             "hourly": {"time": timestamps, "temperature_2m": temperatures}
         })
-        self.assertEqual(comparison["nights"], 5)
+        self.assertEqual(comparison["nights"], 7)
         self.assertEqual(comparison["position"], "coldest")
         self.assertEqual(comparison["last_night_avg_c"], 8.0)
         self.assertLess(comparison["delta_c"], 0)
@@ -312,7 +313,7 @@ class BabyMonitorTest(unittest.TestCase):
                 "baby-room-esp32", 850 + index * 10, 18.0, 52.0, -60,
                 "BABY_SCD40_1.2.0", 1000 + index * 3600, "power_on", 0
             ))
-        for day_offset in range(1, 6):
+        for day_offset in range(1, 8):
             for index in range(9):
                 timestamp = start - timedelta(days=day_offset) + timedelta(hours=index)
                 rows.append((
@@ -339,7 +340,10 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertEqual(summary["source"], "recorded")
         self.assertEqual(summary["temperature"]["ideal_pct"], 100)
         self.assertEqual(summary["co2"]["below_1000_pct"], 100)
-        self.assertEqual(summary["rolling_comparison"]["nights"], 5)
+        self.assertEqual(summary["rolling_comparison"]["nights"], 7)
+        self.assertEqual(summary["rolling_comparison"]["temperature_previous_avg"], 19.4)
+        self.assertEqual(summary["rolling_comparison"]["co2_previous_avg"], 940)
+        self.assertEqual(summary["rolling_comparison"]["co2_avg_pct_delta"], -5)
         self.assertEqual(
             summary["rolling_comparison"]["temperature_position"], "coldest"
         )
@@ -454,6 +458,8 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertIn(b'id="eventTime"', baby.data)
         self.assertIn(b"occurredAt = chosenTime", baby.data)
         self.assertIn(b"The next change will be saved for", baby.data)
+        self.assertIn(b"previous seven-night average", baby.data)
+        self.assertIn(b"may have contributed", baby.data)
         self.assertNotIn(b"eventTime < firstTime", baby.data)
         self.assertNotIn(b'data-event="heating_off"', baby.data)
         self.assertIn(b'id="exportLink"', baby.data)

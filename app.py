@@ -842,7 +842,7 @@ class BabyDataManager:
         summary = self._summarize_window(conn, start, end)
         previous_nights = [
             previous
-            for day_offset in range(1, 6)
+            for day_offset in range(1, 8)
             if (previous := self._summarize_window(
                 conn,
                 start - timedelta(days=day_offset),
@@ -873,6 +873,12 @@ class BabyDataManager:
             }
             previous_temperatures = [night["temperature"]["avg"] for night in previous_nights]
             baseline_temperature = statistics.mean(previous_temperatures)
+            baseline_humidity = statistics.mean(
+                night["humidity"]["avg"] for night in previous_nights
+            )
+            baseline_co2 = statistics.mean(
+                night["co2"]["avg"] for night in previous_nights
+            )
             if summary["temperature"]["avg"] < min(previous_temperatures):
                 temperature_position = "coldest"
             elif summary["temperature"]["avg"] > max(previous_temperatures):
@@ -885,16 +891,18 @@ class BabyDataManager:
                 "temperature_avg_delta": round(
                     summary["temperature"]["avg"] - baseline_temperature, 1
                 ),
+                "temperature_previous_avg": round(baseline_temperature, 1),
                 "humidity_avg_delta": round(
-                    summary["humidity"]["avg"] - statistics.mean(
-                        night["humidity"]["avg"] for night in previous_nights
-                    ), 1
+                    summary["humidity"]["avg"] - baseline_humidity, 1
                 ),
+                "humidity_previous_avg": round(baseline_humidity, 1),
                 "co2_avg_delta": round(
-                    summary["co2"]["avg"] - statistics.mean(
-                        night["co2"]["avg"] for night in previous_nights
-                    )
-                )
+                    summary["co2"]["avg"] - baseline_co2
+                ),
+                "co2_previous_avg": round(baseline_co2),
+                "co2_avg_pct_delta": round(
+                    100 * (summary["co2"]["avg"] - baseline_co2) / baseline_co2
+                ) if baseline_co2 else None
             }
         return summary
 
@@ -989,7 +997,7 @@ class WeatherService:
                     "hourly": "temperature_2m",
                     "temperature_unit": "celsius",
                     "timezone": "UTC",
-                    "past_days": 7,
+                    "past_days": 9,
                     "forecast_days": 1
                 })
                 request_data = urllib.request.Request(
@@ -1052,7 +1060,7 @@ class WeatherService:
         )
 
         nightly_averages = []
-        for day_offset in range(6):
+        for day_offset in range(8):
             start = (start_local - timedelta(days=day_offset)).astimezone(timezone.utc)
             end = (end_local - timedelta(days=day_offset)).astimezone(timezone.utc)
             values = [

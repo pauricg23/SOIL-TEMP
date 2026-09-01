@@ -402,6 +402,8 @@
         let co2Chart;
         let refreshing = false;
         let latestEvents = new Map();
+        let latestNightSummary = null;
+        let latestOutsideWeather = null;
 
         const thresholdBandsPlugin = {
             id: "thresholdBands",
@@ -692,6 +694,7 @@
                 if (!response.ok) throw new Error("Weather unavailable");
                 const weather = await response.json();
                 if (!weather.available) throw new Error("Weather unavailable");
+                latestOutsideWeather = weather;
                 document.getElementById("outsideValue").textContent = `${weather.temperature_c.toFixed(1)}°C`;
                 setStatus(
                     "outsideStatus",
@@ -715,10 +718,13 @@
                         trend.textContent = `Last night outside was ${difference}°C ${comparison.delta_c < 0 ? "cooler" : "warmer"} than the ${nightsLabel} average.`;
                     }
                 }
+                updateNightWeatherExplanation();
             } catch (_error) {
+                latestOutsideWeather = null;
                 document.getElementById("outsideValue").textContent = "--°C";
                 document.getElementById("outsideTrend").textContent = "";
                 setStatus("outsideStatus", "Outside weather unavailable", "caution");
+                updateNightWeatherExplanation();
             }
         }
 
@@ -783,6 +789,7 @@
 
         function updateNightSummary(summary) {
             if (!summary) return;
+            latestNightSummary = summary;
             document.getElementById("nightPeriod").textContent =
                 `${formatTime(summary.start)} to ${formatClock(summary.end)} · ${summary.duration_hours} hours`;
             document.getElementById("nightSource").textContent = summary.source === "recorded"
@@ -795,38 +802,57 @@
                 ["CO₂ fresh-air time", `${summary.co2.below_1000_pct}%`, `Below 1000 ppm · ${summary.co2.above_1400_pct}% above 1400`]
             ].map(item => `<div class="summary-item"><span>${item[0]}</span><strong>${item[1]}</strong><span>${item[2]}</span></div>`).join("");
 
-            const comparison = summary.comparison;
-            if (!comparison) {
-                document.getElementById("nightComparison").textContent = "More nights will unlock night-to-night comparisons.";
-            } else {
-                const co2Direction = comparison.co2_avg_delta === 0 ? "the same as" :
-                    `${Math.abs(comparison.co2_avg_delta)} ppm ${comparison.co2_avg_delta < 0 ? "lower" : "higher"} than`;
-                document.getElementById("nightComparison").textContent =
-                    `Compared with the previous night: CO₂ was ${co2Direction} before; humidity changed by ${comparison.humidity_avg_delta > 0 ? "+" : ""}${comparison.humidity_avg_delta}%.`;
-            }
-
             const rolling = summary.rolling_comparison;
-            const trend = document.getElementById("nightTrend");
             if (!rolling) {
-                trend.textContent = "Five-night trends will appear as more overnight data is collected.";
+                document.getElementById("nightComparison").textContent =
+                    "A weekly comparison will appear after another complete night is recorded.";
+                document.getElementById("nightTrend").textContent = "";
                 return;
             }
-            const nightsLabel = rolling.nights === 1 ? "previous night" : `previous ${rolling.nights} nights`;
-            const temperatureDifference = Math.abs(rolling.temperature_avg_delta).toFixed(1);
-            let temperatureText;
-            if (rolling.temperature_position === "coldest") {
-                temperatureText = `This was the coldest of the last ${rolling.nights + 1} nights, averaging ${temperatureDifference}°C cooler than the ${nightsLabel}`;
-            } else if (rolling.temperature_position === "warmest") {
-                temperatureText = `This was the warmest of the last ${rolling.nights + 1} nights, averaging ${temperatureDifference}°C warmer than the ${nightsLabel}`;
-            } else if (rolling.temperature_avg_delta === 0) {
-                temperatureText = `Temperature matched the ${nightsLabel} average`;
-            } else {
-                temperatureText = `Temperature was ${temperatureDifference}°C ${rolling.temperature_avg_delta < 0 ? "cooler" : "warmer"} than the ${nightsLabel} average`;
-            }
+            const baselineLabel = rolling.nights === 7
+                ? "previous seven-night average"
+                : `available previous ${rolling.nights}-night average`;
+            const co2Text = rolling.co2_avg_pct_delta === 0
+                ? `CO₂ matched it at ${summary.co2.avg} ppm`
+                : `CO₂ averaged ${summary.co2.avg} ppm, ${Math.abs(rolling.co2_avg_pct_delta)}% ${rolling.co2_avg_pct_delta < 0 ? "lower" : "higher"} than ${rolling.co2_previous_avg} ppm`;
+            const temperatureText = rolling.temperature_avg_delta === 0
+                ? `temperature matched it at ${summary.temperature.avg.toFixed(1)}°C`
+                : `temperature averaged ${summary.temperature.avg.toFixed(1)}°C, ${Math.abs(rolling.temperature_avg_delta).toFixed(1)}°C ${rolling.temperature_avg_delta < 0 ? "cooler" : "warmer"} than ${rolling.temperature_previous_avg.toFixed(1)}°C`;
             const humidityText = rolling.humidity_avg_delta === 0
-                ? `humidity matched the ${nightsLabel} average`
-                : `humidity was ${Math.abs(rolling.humidity_avg_delta).toFixed(1)}% ${rolling.humidity_avg_delta < 0 ? "lower" : "higher"} than the ${nightsLabel} average`;
-            trend.textContent = `${temperatureText}; ${humidityText}.`;
+                ? `humidity matched it at ${summary.humidity.avg.toFixed(1)}%`
+                : `humidity averaged ${summary.humidity.avg.toFixed(1)}%, ${Math.abs(rolling.humidity_avg_delta).toFixed(1)} percentage points ${rolling.humidity_avg_delta < 0 ? "lower" : "higher"} than ${rolling.humidity_previous_avg.toFixed(1)}%`;
+            document.getElementById("nightComparison").textContent =
+                `Compared with the ${baselineLabel}: ${co2Text}; ${temperatureText}; ${humidityText}.`;
+            updateNightWeatherExplanation();
+        }
+
+        function updateNightWeatherExplanation() {
+            const trend = document.getElementById("nightTrend");
+            const rolling = latestNightSummary && latestNightSummary.rolling_comparison;
+            const outside = latestOutsideWeather && latestOutsideWeather.night_comparison;
+            if (!rolling) return;
+            if (!outside) {
+                trend.textContent = "Outside-temperature context will appear when weather history is available.";
+                return;
+            }
+            const baselineLabel = outside.nights === 7
+                ? "previous seven-night average"
+                : `available previous ${outside.nights}-night average`;
+            const outsideDifference = Math.abs(outside.delta_c).toFixed(1);
+            const outsideDirection = outside.delta_c < 0 ? "colder" : outside.delta_c > 0 ? "warmer" : "the same";
+            const outsideComparison = outside.delta_c === 0
+                ? `matching the ${baselineLabel}`
+                : `${outsideDifference}°C ${outsideDirection} than the ${baselineLabel}`;
+            let influenceText;
+            if (Math.abs(outside.delta_c) < 0.5 || Math.abs(rolling.temperature_avg_delta) < 0.2) {
+                influenceText = "Outside conditions were close to normal, so they do not strongly explain the room change.";
+            } else if (Math.sign(outside.delta_c) === Math.sign(rolling.temperature_avg_delta)) {
+                influenceText = `The ${outsideDirection} outdoor conditions may have contributed to the room being ${rolling.temperature_avg_delta < 0 ? "cooler" : "warmer"}.`;
+            } else {
+                influenceText = "The room moved differently from outside, so heating, ventilation, or occupancy likely had more influence.";
+            }
+            trend.textContent =
+                `${latestOutsideWeather.label} outside temperature averaged ${outside.last_night_avg_c.toFixed(1)}°C, ${outsideComparison}. ${influenceText}`;
         }
 
         function updateEvents(events) {
