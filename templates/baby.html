@@ -109,6 +109,10 @@
         .summary-item { padding: 16px; border-radius: 18px; background: #faf8fc; }
         .summary-item strong { display: block; margin-top: 4px; font-size: 1.25rem; }
         .summary-item span { color: var(--muted); font-size: .78rem; }
+        .night-delta { display: inline-flex !important; align-items: center; width: fit-content; margin-top: 9px; padding: 4px 8px; border-radius: 999px; font-weight: 850; }
+        .night-delta.bad { color: #a83d52; background: #fdecef; }
+        .night-delta.good { color: #2f7b54; background: #eaf6ef; }
+        .night-delta.flat { color: #6f6880; background: #efedf3; }
         .comparison { margin: 14px 0 0; color: var(--muted); font-size: .86rem; }
         .event-time { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin-top: 18px; padding: 16px; border-radius: 18px; background: #faf8fc; }
         .event-time label strong, .event-time label span { display: block; }
@@ -790,19 +794,19 @@
         function updateNightSummary(summary) {
             if (!summary) return;
             latestNightSummary = summary;
+            const rolling = summary.rolling_comparison;
             document.getElementById("nightPeriod").textContent =
                 `${formatTime(summary.start)} to ${formatClock(summary.end)} · ${summary.duration_hours} hours`;
             document.getElementById("nightSource").textContent = summary.source === "recorded"
                 ? (summary.completed ? "Recorded times" : "Night in progress")
                 : "Estimated 11pm–9am";
             document.getElementById("nightSummary").innerHTML = [
-                ["Temperature", `${summary.temperature.avg.toFixed(1)}°C`, `${summary.temperature.ideal_pct}% in 16–20°`],
-                ["Humidity", `${summary.humidity.avg.toFixed(1)}%`, `${summary.humidity.ideal_pct}% comfortable`],
-                ["Average CO₂", `${summary.co2.avg} ppm`, `High ${summary.co2.max} ppm`],
-                ["CO₂ fresh-air time", `${summary.co2.below_1000_pct}%`, `Below 1000 ppm · ${summary.co2.above_1400_pct}% above 1400`]
-            ].map(item => `<div class="summary-item"><span>${item[0]}</span><strong>${item[1]}</strong><span>${item[2]}</span></div>`).join("");
+                ["Temperature", `${summary.temperature.avg.toFixed(1)}°C`, `${summary.temperature.ideal_pct}% in 16–20°`, rolling && nightDeltaMarkup(rolling.temperature_avg_pct_delta)],
+                ["Humidity", `${summary.humidity.avg.toFixed(1)}%`, `${summary.humidity.ideal_pct}% comfortable`, rolling && nightDeltaMarkup(rolling.humidity_avg_pct_delta)],
+                ["Average CO₂", `${summary.co2.avg} ppm`, `High ${summary.co2.max} ppm`, rolling && nightDeltaMarkup(rolling.co2_avg_pct_delta)],
+                ["CO₂ fresh-air time", `${summary.co2.below_1000_pct}%`, `Below 1000 ppm · ${summary.co2.above_1400_pct}% above 1400`, rolling && nightDeltaMarkup(rolling.fresh_air_pct_point_delta, " pts", true)]
+            ].map(item => `<div class="summary-item"><span>${item[0]}</span><strong>${item[1]}</strong><span>${item[2]}</span>${item[3] || ""}</div>`).join("");
 
-            const rolling = summary.rolling_comparison;
             if (!rolling) {
                 document.getElementById("nightComparison").textContent =
                     "A weekly comparison will appear after another complete night is recorded.";
@@ -812,18 +816,17 @@
             const baselineLabel = rolling.nights === 7
                 ? "previous seven-night average"
                 : `available previous ${rolling.nights}-night average`;
-            const co2Text = rolling.co2_avg_pct_delta === 0
-                ? `CO₂ matched it at ${summary.co2.avg} ppm`
-                : `CO₂ averaged ${summary.co2.avg} ppm, ${Math.abs(rolling.co2_avg_pct_delta)}% ${rolling.co2_avg_pct_delta < 0 ? "lower" : "higher"} than ${rolling.co2_previous_avg} ppm`;
-            const temperatureText = rolling.temperature_avg_delta === 0
-                ? `temperature matched it at ${summary.temperature.avg.toFixed(1)}°C`
-                : `temperature averaged ${summary.temperature.avg.toFixed(1)}°C, ${Math.abs(rolling.temperature_avg_delta).toFixed(1)}°C ${rolling.temperature_avg_delta < 0 ? "cooler" : "warmer"} than ${rolling.temperature_previous_avg.toFixed(1)}°C`;
-            const humidityText = rolling.humidity_avg_delta === 0
-                ? `humidity matched it at ${summary.humidity.avg.toFixed(1)}%`
-                : `humidity averaged ${summary.humidity.avg.toFixed(1)}%, ${Math.abs(rolling.humidity_avg_delta).toFixed(1)} percentage points ${rolling.humidity_avg_delta < 0 ? "lower" : "higher"} than ${rolling.humidity_previous_avg.toFixed(1)}%`;
             document.getElementById("nightComparison").textContent =
-                `Compared with the ${baselineLabel}: ${co2Text}; ${temperatureText}; ${humidityText}.`;
+                `Arrows compare last night with the ${baselineLabel}.`;
             updateNightWeatherExplanation();
+        }
+
+        function nightDeltaMarkup(value, unit = "%", higherIsGood = false) {
+            if (value === null || value === undefined) return "";
+            if (value === 0) return `<span class="night-delta flat">→ 0${unit}</span>`;
+            const improved = higherIsGood ? value > 0 : value < 0;
+            const arrow = value > 0 ? "▲" : "▼";
+            return `<span class="night-delta ${improved ? "good" : "bad"}">${arrow} ${Math.abs(value)}${unit}</span>`;
         }
 
         function updateNightWeatherExplanation() {

@@ -879,6 +879,9 @@ class BabyDataManager:
             baseline_co2 = statistics.mean(
                 night["co2"]["avg"] for night in previous_nights
             )
+            baseline_fresh_air = statistics.mean(
+                night["co2"]["below_1000_pct"] for night in previous_nights
+            )
             if summary["temperature"]["avg"] < min(previous_temperatures):
                 temperature_position = "coldest"
             elif summary["temperature"]["avg"] > max(previous_temperatures):
@@ -892,17 +895,31 @@ class BabyDataManager:
                     summary["temperature"]["avg"] - baseline_temperature, 1
                 ),
                 "temperature_previous_avg": round(baseline_temperature, 1),
+                "temperature_avg_pct_delta": round(
+                    100 * (
+                        summary["temperature"]["avg"] - baseline_temperature
+                    ) / baseline_temperature
+                ) if baseline_temperature else None,
                 "humidity_avg_delta": round(
                     summary["humidity"]["avg"] - baseline_humidity, 1
                 ),
                 "humidity_previous_avg": round(baseline_humidity, 1),
+                "humidity_avg_pct_delta": round(
+                    100 * (
+                        summary["humidity"]["avg"] - baseline_humidity
+                    ) / baseline_humidity
+                ) if baseline_humidity else None,
                 "co2_avg_delta": round(
                     summary["co2"]["avg"] - baseline_co2
                 ),
                 "co2_previous_avg": round(baseline_co2),
                 "co2_avg_pct_delta": round(
                     100 * (summary["co2"]["avg"] - baseline_co2) / baseline_co2
-                ) if baseline_co2 else None
+                ) if baseline_co2 else None,
+                "fresh_air_previous_pct": round(baseline_fresh_air),
+                "fresh_air_pct_point_delta": round(
+                    summary["co2"]["below_1000_pct"] - baseline_fresh_air
+                )
             }
         return summary
 

@@ -342,8 +342,11 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertEqual(summary["co2"]["below_1000_pct"], 100)
         self.assertEqual(summary["rolling_comparison"]["nights"], 7)
         self.assertEqual(summary["rolling_comparison"]["temperature_previous_avg"], 19.4)
+        self.assertEqual(summary["rolling_comparison"]["temperature_avg_pct_delta"], -7)
         self.assertEqual(summary["rolling_comparison"]["co2_previous_avg"], 940)
         self.assertEqual(summary["rolling_comparison"]["co2_avg_pct_delta"], -5)
+        self.assertEqual(summary["rolling_comparison"]["humidity_avg_pct_delta"], 4)
+        self.assertEqual(summary["rolling_comparison"]["fresh_air_pct_point_delta"], 0)
         self.assertEqual(
             summary["rolling_comparison"]["temperature_position"], "coldest"
         )
@@ -460,6 +463,8 @@ class BabyMonitorTest(unittest.TestCase):
         self.assertIn(b"The next change will be saved for", baby.data)
         self.assertIn(b"previous seven-night average", baby.data)
         self.assertIn(b"may have contributed", baby.data)
+        self.assertIn(b"function nightDeltaMarkup", baby.data)
+        self.assertIn(b".night-delta.bad", baby.data)
         self.assertNotIn(b"eventTime < firstTime", baby.data)
         self.assertNotIn(b'data-event="heating_off"', baby.data)
         self.assertIn(b'id="exportLink"', baby.data)
