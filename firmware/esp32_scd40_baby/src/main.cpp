@@ -28,7 +28,7 @@ constexpr uint8_t RING_DATA_PIN = 18;
 constexpr uint16_t RING_PIXEL_COUNT = 12;
 constexpr uint8_t DEFAULT_BRIGHTNESS = 32;
 constexpr uint8_t MIN_BRIGHTNESS = 5;
-constexpr uint8_t MAX_BRIGHTNESS = 90;
+constexpr uint8_t MAX_BRIGHTNESS = 153;
 constexpr uint8_t BRIGHTNESS_STEP = 8;
 constexpr unsigned long LIGHT_FRAME_INTERVAL_MS = 35;
 constexpr unsigned long GLOW_PERIOD_MS = 4500;
@@ -38,7 +38,7 @@ constexpr unsigned long RETRY_INTERVAL_MS = 5000;
 constexpr unsigned long WIFI_RETRY_INTERVAL_MS = 10000;
 constexpr unsigned long SENSOR_RETRY_INTERVAL_MS = 10000;
 constexpr unsigned long SENSOR_WARMUP_MS = 180000;
-constexpr char FIRMWARE_VERSION[] = "BABY_SCD40_1.3.0";
+constexpr char FIRMWARE_VERSION[] = "BABY_SCD40_1.3.1";
 
 constexpr uint64_t IR_POWER = 0xFFA25D;
 constexpr uint64_t IR_VOLUME_UP = 0xFF629D;

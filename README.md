@@ -35,7 +35,7 @@ The room light uses a 12-pixel WS2812 ring on GPIO18 and an IR receiver on GPIO1
 - `4`: manual colour; press repeatedly to cycle colours
 - `5`: CO2 status colour
 
-Brightness is capped at 35% for the USB/VIN-powered ring. The selected mode, colour, brightness and power state persist across restarts.
+Brightness is capped at 60% for the USB/VIN-powered ring. The selected mode, colour, brightness and power state persist across restarts.
 
 The baby dashboard includes expandable time-bucketed charts, timestamped high/low summaries, overnight summaries, room-event markers, startup/outlier filtering, cached Sligo-area outside temperature, CSV export and device-health details. Raw readings remain in SQLite even when filtered from graphs.
 
