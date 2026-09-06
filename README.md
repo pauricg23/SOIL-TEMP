@@ -25,6 +25,18 @@ End-to-end temperature monitoring for a compost heap (or soil) with:
 
 The PlatformIO project is in `firmware/esp32_scd40_baby`. It reads one SCD40 on GPIO 21/22 and posts to `POST /submit/baby` every 30 seconds over local Wi-Fi. Baby readings use a separate `baby_readings` table in the same SQLite database.
 
+The room light uses a 12-pixel WS2812 ring on GPIO18 and an IR receiver on GPIO19. Remote controls are:
+
+- `Power`: ring on/off
+- `VOL+` / `VOL-`: global brightness for every mode
+- `1`: automatic temperature colour
+- `2`: glowing automatic temperature colour
+- `3`: warm white
+- `4`: manual colour; press repeatedly to cycle colours
+- `5`: CO2 status colour
+
+Brightness is capped at 35% for the USB/VIN-powered ring. The selected mode, colour, brightness and power state persist across restarts.
+
 The baby dashboard includes expandable time-bucketed charts, timestamped high/low summaries, overnight summaries, room-event markers, startup/outlier filtering, cached Sligo-area outside temperature, CSV export and device-health details. Raw readings remain in SQLite even when filtered from graphs.
 
 Copy `firmware/esp32_scd40_baby/src/config.example.h` to `config.local.h` before uploading. Configure the Wi-Fi credentials, existing ingest token and the Pi endpoint. Local secrets are ignored by Git.

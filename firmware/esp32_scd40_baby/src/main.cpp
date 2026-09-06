@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Adafruit_NeoPixel.h>
 #include <esp_system.h>
 #include <HTTPClient.h>
 #include <IRrecv.h>
@@ -23,48 +24,80 @@
 constexpr uint8_t SDA_PIN = 21;
 constexpr uint8_t SCL_PIN = 22;
 constexpr uint8_t IR_PIN = 19;
-constexpr uint8_t RGB_RED_PIN = 27;
-constexpr uint8_t RGB_GREEN_PIN = 26;
-constexpr uint8_t RGB_BLUE_PIN = 25;
-constexpr uint8_t RGB_RED_CHANNEL = 0;
-constexpr uint8_t RGB_GREEN_CHANNEL = 1;
-constexpr uint8_t RGB_BLUE_CHANNEL = 2;
-constexpr uint16_t RGB_PWM_FREQUENCY = 5000;
-constexpr uint8_t RGB_PWM_RESOLUTION = 8;
-constexpr uint8_t DEFAULT_BRIGHTNESS = 40;
-constexpr uint8_t MIN_BRIGHTNESS = 8;
-constexpr uint8_t BRIGHTNESS_STEP = 16;
+constexpr uint8_t RING_DATA_PIN = 18;
+constexpr uint16_t RING_PIXEL_COUNT = 12;
+constexpr uint8_t DEFAULT_BRIGHTNESS = 32;
+constexpr uint8_t MIN_BRIGHTNESS = 5;
+constexpr uint8_t MAX_BRIGHTNESS = 90;
+constexpr uint8_t BRIGHTNESS_STEP = 8;
+constexpr unsigned long LIGHT_FRAME_INTERVAL_MS = 35;
+constexpr unsigned long GLOW_PERIOD_MS = 4500;
+constexpr unsigned long SETTINGS_SAVE_DELAY_MS = 1200;
 constexpr unsigned long SAMPLE_INTERVAL_MS = 30000;
 constexpr unsigned long RETRY_INTERVAL_MS = 5000;
 constexpr unsigned long WIFI_RETRY_INTERVAL_MS = 10000;
 constexpr unsigned long SENSOR_RETRY_INTERVAL_MS = 10000;
 constexpr unsigned long SENSOR_WARMUP_MS = 180000;
-constexpr char FIRMWARE_VERSION[] = "BABY_SCD40_1.2.0";
+constexpr char FIRMWARE_VERSION[] = "BABY_SCD40_1.3.0";
 
 constexpr uint64_t IR_POWER = 0xFFA25D;
 constexpr uint64_t IR_VOLUME_UP = 0xFF629D;
 constexpr uint64_t IR_VOLUME_DOWN = 0xFFA857;
-constexpr uint64_t IR_UP = 0xFF906F;
-constexpr uint64_t IR_DOWN = 0xFFE01F;
-constexpr uint64_t IR_RESET_BRIGHTNESS = 0xFF9867;
+constexpr uint64_t IR_MODE_TEMPERATURE = 0xFF30CF;
+constexpr uint64_t IR_MODE_GLOW = 0xFF18E7;
+constexpr uint64_t IR_MODE_WARM_WHITE = 0xFF7A85;
+constexpr uint64_t IR_MODE_MANUAL = 0xFF10EF;
+constexpr uint64_t IR_MODE_CO2 = 0xFF38C7;
 constexpr uint64_t IR_REPEAT = UINT64_MAX;
+
+enum class LightMode : uint8_t {
+    TEMPERATURE = 1,
+    TEMPERATURE_GLOW = 2,
+    WARM_WHITE = 3,
+    MANUAL_COLOUR = 4,
+    CO2 = 5
+};
+
+struct RgbColour {
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue;
+};
+
+constexpr RgbColour MANUAL_COLOURS[] = {
+    {175, 40, 255},
+    {255, 70, 145},
+    {65, 145, 255},
+    {55, 220, 155},
+    {255, 130, 25},
+    {255, 45, 8}
+};
 
 SensirionI2cScd4x sensor;
 IRrecv irReceiver(IR_PIN);
 decode_results irResults;
 Preferences preferences;
+Adafruit_NeoPixel roomRing(
+    RING_PIXEL_COUNT, RING_DATA_PIN, NEO_GRB + NEO_KHZ800);
 char sensorErrorMessage[96];
 unsigned long lastSampleAt = 0;
 unsigned long lastRetryAt = 0;
 unsigned long lastWifiAttemptAt = 0;
 unsigned long lastSensorAttemptAt = 0;
+unsigned long lastLightFrameAt = 0;
+unsigned long lastSettingsChangeAt = 0;
 uint32_t readingSequence = 0;
 uint32_t bootId = 0;
 String pendingPayload;
 bool sensorReady = false;
 bool lightEnabled = true;
+bool settingsDirty = false;
 uint8_t lightBrightness = DEFAULT_BRIGHTNESS;
+uint8_t manualColourIndex = 0;
+LightMode lightMode = LightMode::TEMPERATURE;
 float latestTemperatureC = NAN;
+uint16_t latestCo2Ppm = 0;
+uint64_t lastIrCode = 0;
 esp_reset_reason_t lastResetReason = ESP_RST_UNKNOWN;
 
 const char* resetReasonName(esp_reset_reason_t reason) {
@@ -83,92 +116,160 @@ const char* resetReasonName(esp_reset_reason_t reason) {
     }
 }
 
-void writeRgb(uint8_t red, uint8_t green, uint8_t blue) {
-    if (!lightEnabled) {
-        red = 0;
-        green = 0;
-        blue = 0;
+const char* lightModeName(LightMode mode) {
+    switch (mode) {
+        case LightMode::TEMPERATURE: return "temperature";
+        case LightMode::TEMPERATURE_GLOW: return "temperature glow";
+        case LightMode::WARM_WHITE: return "warm white";
+        case LightMode::MANUAL_COLOUR: return "manual colour";
+        case LightMode::CO2: return "CO2";
+        default: return "temperature";
     }
-
-    ledcWrite(RGB_RED_CHANNEL,
-              static_cast<uint16_t>(red) * lightBrightness / 255);
-    ledcWrite(RGB_GREEN_CHANNEL,
-              static_cast<uint16_t>(green) * lightBrightness / 255);
-    ledcWrite(RGB_BLUE_CHANNEL,
-              static_cast<uint16_t>(blue) * lightBrightness / 255);
 }
 
-void updateTemperatureLight() {
-    if (!isfinite(latestTemperatureC)) {
-        writeRgb(0, 0, 0);
-        return;
-    }
+RgbColour temperatureColour() {
+    if (!isfinite(latestTemperatureC)) return {0, 0, 0};
+    if (latestTemperatureC < 16.0F) return {175, 20, 255};
+    if (latestTemperatureC <= 20.0F) return {255, 115, 8};
+    if (latestTemperatureC <= 24.0F) return {255, 45, 4};
+    return {255, 0, 0};
+}
 
-    if (latestTemperatureC < 16.0F) {
-        writeRgb(175, 0, 255);
-        Serial.println("Room light: purple (cool)");
-    } else if (latestTemperatureC <= 20.0F) {
-        writeRgb(255, 110, 0);
-        Serial.println("Room light: golden yellow (recommended)");
-    } else if (latestTemperatureC <= 24.0F) {
-        writeRgb(255, 38, 0);
-        Serial.println("Room light: amber orange (warm)");
-    } else {
-        writeRgb(255, 0, 0);
-        Serial.println("Room light: red (too warm)");
+RgbColour co2Colour() {
+    if (latestCo2Ppm == 0) return {0, 0, 0};
+    if (latestCo2Ppm < 800) return {35, 220, 125};
+    if (latestCo2Ppm <= 1000) return {120, 215, 80};
+    if (latestCo2Ppm <= 1400) return {255, 115, 8};
+    return {255, 0, 0};
+}
+
+void renderRing(RgbColour colour, float intensity = 1.0F) {
+    if (!lightEnabled) intensity = 0.0F;
+    intensity = constrain(intensity, 0.0F, 1.0F);
+    uint8_t effectiveBrightness = static_cast<uint8_t>(
+        roundf(static_cast<float>(lightBrightness) * intensity));
+    uint8_t red = static_cast<uint8_t>(
+        static_cast<uint16_t>(colour.red) * effectiveBrightness / 255);
+    uint8_t green = static_cast<uint8_t>(
+        static_cast<uint16_t>(colour.green) * effectiveBrightness / 255);
+    uint8_t blue = static_cast<uint8_t>(
+        static_cast<uint16_t>(colour.blue) * effectiveBrightness / 255);
+    roomRing.fill(roomRing.Color(red, green, blue));
+    roomRing.show();
+}
+
+void updateRoomLight(bool force = false) {
+    unsigned long now = millis();
+    if (!force && now - lastLightFrameAt < LIGHT_FRAME_INTERVAL_MS) return;
+    lastLightFrameAt = now;
+
+    RgbColour colour = {0, 0, 0};
+    float intensity = 1.0F;
+    switch (lightMode) {
+        case LightMode::TEMPERATURE:
+            colour = temperatureColour();
+            break;
+        case LightMode::TEMPERATURE_GLOW: {
+            colour = temperatureColour();
+            float progress = static_cast<float>(now % GLOW_PERIOD_MS) /
+                             static_cast<float>(GLOW_PERIOD_MS);
+            intensity = 0.25F + 0.75F *
+                        (0.5F - 0.5F * cosf(progress * TWO_PI));
+            break;
+        }
+        case LightMode::WARM_WHITE:
+            colour = {255, 115, 35};
+            break;
+        case LightMode::MANUAL_COLOUR:
+            colour = MANUAL_COLOURS[manualColourIndex];
+            break;
+        case LightMode::CO2:
+            colour = co2Colour();
+            break;
     }
+    renderRing(colour, intensity);
 }
 
 void saveLightSettings() {
     preferences.putBool("enabled", lightEnabled);
     preferences.putUChar("brightness", lightBrightness);
+    preferences.putUChar("mode", static_cast<uint8_t>(lightMode));
+    preferences.putUChar("colour", manualColourIndex);
+    settingsDirty = false;
+}
+
+void markSettingsChanged() {
+    settingsDirty = true;
+    lastSettingsChangeAt = millis();
+}
+
+void setLightMode(LightMode mode) {
+    lightMode = mode;
+    lightEnabled = true;
+    markSettingsChanged();
+    updateRoomLight(true);
+    Serial.printf("Room light mode: %s\n", lightModeName(lightMode));
 }
 
 void adjustBrightness(int change) {
     int updatedBrightness = constrain(
         static_cast<int>(lightBrightness) + change,
-        static_cast<int>(MIN_BRIGHTNESS), 255);
+        static_cast<int>(MIN_BRIGHTNESS),
+        static_cast<int>(MAX_BRIGHTNESS));
     lightBrightness = static_cast<uint8_t>(updatedBrightness);
     lightEnabled = true;
-    saveLightSettings();
-    updateTemperatureLight();
-    Serial.printf("Room light brightness: %u/255\n", lightBrightness);
+    markSettingsChanged();
+    updateRoomLight(true);
+    Serial.printf("Room light brightness: %u%%\n",
+                  static_cast<unsigned int>(lightBrightness) * 100 / 255);
 }
 
 void handleRemote() {
-    if (!irReceiver.decode(&irResults)) {
-        return;
-    }
+    if (!irReceiver.decode(&irResults)) return;
 
     uint64_t code = irResults.value;
     irReceiver.resume();
     if (code == IR_REPEAT) {
-        return;
+        if (lastIrCode != IR_VOLUME_UP && lastIrCode != IR_VOLUME_DOWN) return;
+        code = lastIrCode;
+    } else {
+        lastIrCode = code;
+        Serial.printf("IR code received: 0x%08llX\n",
+                      static_cast<unsigned long long>(code));
     }
 
-    Serial.printf("IR code received: 0x%08llX\n",
-                  static_cast<unsigned long long>(code));
     switch (code) {
         case IR_POWER:
             lightEnabled = !lightEnabled;
-            saveLightSettings();
-            updateTemperatureLight();
+            markSettingsChanged();
+            updateRoomLight(true);
             Serial.printf("Room light: %s\n", lightEnabled ? "on" : "off");
             break;
         case IR_VOLUME_UP:
-        case IR_UP:
             adjustBrightness(BRIGHTNESS_STEP);
             break;
         case IR_VOLUME_DOWN:
-        case IR_DOWN:
             adjustBrightness(-BRIGHTNESS_STEP);
             break;
-        case IR_RESET_BRIGHTNESS:
-            lightBrightness = DEFAULT_BRIGHTNESS;
-            lightEnabled = true;
-            saveLightSettings();
-            updateTemperatureLight();
-            Serial.printf("Room light brightness reset: %u/255\n", lightBrightness);
+        case IR_MODE_TEMPERATURE:
+            setLightMode(LightMode::TEMPERATURE);
+            break;
+        case IR_MODE_GLOW:
+            setLightMode(LightMode::TEMPERATURE_GLOW);
+            break;
+        case IR_MODE_WARM_WHITE:
+            setLightMode(LightMode::WARM_WHITE);
+            break;
+        case IR_MODE_MANUAL:
+            if (lightMode == LightMode::MANUAL_COLOUR && lightEnabled) {
+                manualColourIndex = (manualColourIndex + 1) %
+                                    (sizeof MANUAL_COLOURS / sizeof MANUAL_COLOURS[0]);
+            }
+            setLightMode(LightMode::MANUAL_COLOUR);
+            Serial.printf("Manual colour: %u\n", manualColourIndex + 1);
+            break;
+        case IR_MODE_CO2:
+            setLightMode(LightMode::CO2);
             break;
         default:
             Serial.println("IR button is not assigned");
@@ -177,20 +278,30 @@ void handleRemote() {
 }
 
 void initializeRoomLight() {
-    ledcSetup(RGB_RED_CHANNEL, RGB_PWM_FREQUENCY, RGB_PWM_RESOLUTION);
-    ledcSetup(RGB_GREEN_CHANNEL, RGB_PWM_FREQUENCY, RGB_PWM_RESOLUTION);
-    ledcSetup(RGB_BLUE_CHANNEL, RGB_PWM_FREQUENCY, RGB_PWM_RESOLUTION);
-    ledcAttachPin(RGB_RED_PIN, RGB_RED_CHANNEL);
-    ledcAttachPin(RGB_GREEN_PIN, RGB_GREEN_CHANNEL);
-    ledcAttachPin(RGB_BLUE_PIN, RGB_BLUE_CHANNEL);
+    roomRing.begin();
+    roomRing.clear();
+    roomRing.show();
 
     preferences.begin("baby-light", false);
     lightEnabled = preferences.getBool("enabled", true);
-    lightBrightness = preferences.getUChar("brightness", DEFAULT_BRIGHTNESS);
-    lightBrightness = constrain(lightBrightness, MIN_BRIGHTNESS, 255);
-    writeRgb(0, 0, 0);
+    lightBrightness = constrain(
+        preferences.getUChar("brightness", DEFAULT_BRIGHTNESS),
+        MIN_BRIGHTNESS, MAX_BRIGHTNESS);
+    uint8_t savedMode = preferences.getUChar(
+        "mode", static_cast<uint8_t>(LightMode::TEMPERATURE));
+    if (savedMode < static_cast<uint8_t>(LightMode::TEMPERATURE) ||
+        savedMode > static_cast<uint8_t>(LightMode::CO2)) {
+        savedMode = static_cast<uint8_t>(LightMode::TEMPERATURE);
+    }
+    lightMode = static_cast<LightMode>(savedMode);
+    manualColourIndex = preferences.getUChar("colour", 0) %
+                        (sizeof MANUAL_COLOURS / sizeof MANUAL_COLOURS[0]);
 
     irReceiver.enableIRIn();
+    updateRoomLight(true);
+    Serial.printf("WS2812 ring ready on GPIO18; mode %s; brightness %u%%\n",
+                  lightModeName(lightMode),
+                  static_cast<unsigned int>(lightBrightness) * 100 / 255);
     Serial.println("IR receiver ready on GPIO19");
 }
 
@@ -350,7 +461,8 @@ bool readSensor() {
         Serial.println("SCD40 warming up; dashboard will exclude this reading");
     } else {
         latestTemperatureC = temperatureC;
-        updateTemperatureLight();
+        latestCo2Ppm = co2Ppm;
+        updateRoomLight(true);
     }
     return true;
 }
@@ -376,6 +488,11 @@ void setup() {
 
 void loop() {
     handleRemote();
+    updateRoomLight();
+    if (settingsDirty &&
+        millis() - lastSettingsChangeAt >= SETTINGS_SAVE_DELAY_MS) {
+        saveLightSettings();
+    }
     connectWifi();
     unsigned long now = millis();
 
